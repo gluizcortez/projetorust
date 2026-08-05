@@ -167,3 +167,116 @@ orquestração — e sua cobertura chega nas fases indicadas.
 ela abortaria a captura de **todos** os documentos (é justamente o
 comportamento que a invariante descreve). O caso fica para um arquivo de chaves
 separado, a ser usado em um cenário próprio na fase F7.
+
+---
+
+## F1 — Fundação do repositório e cadeia de ferramentas
+
+**Status:** concluída com ressalva de verificação · **Data:** 2026-08-05
+
+### Entregáveis
+
+| Artefato | Caminho | Estado |
+|---|---|---|
+| Módulo Go | `go.mod` (`go 1.23.0`) | sem dependências de terceiros |
+| Árvore de pacotes | `internal/`, `cmd/`, `test/`, `db/`, `api/`, `deploy/` | 15 `doc.go`, cada um dizendo o que o pacote **não** faz |
+| Ponto de entrada | `cmd/recorte-api/main.go` | sobe, responde 404, aceita `-versao` e `-healthcheck` |
+| Verificação de arquitetura | `internal/arch_test.go` | falha nomeando o pacote infrator |
+| Configuração de lint | `.golangci.yml` (esquema v2) | 0 problemas no repositório |
+| Automação | `Makefile` | `ci` = `tidy` + `lint` + `test` + `build` |
+| Imagem | `deploy/Dockerfile` | multiestágio, distroless, sem privilégio |
+| Integração contínua | `.github/workflows/ci.yml` | dois trabalhos: verificação e imagem |
+
+### Decisões tomadas
+
+1. **`misspell` foi removido depois de medido.** Ele só conhece inglês e
+   sinalizou `Comando`→`Commando`, `Eles`→`Eels`, `posicional`→`positional`.
+   Não há como configurar dicionário pt-BR. A recusa está registrada em nota no
+   próprio `.golangci.yml`, com o motivo — para que ninguém o reintroduza
+   achando que foi esquecimento.
+
+2. **`depguard` foi recusado por redundância** com `internal/arch_test.go`, que
+   já verifica a mesma regra e produz mensagem melhor.
+
+3. **`errcheck` com `check-blank: false`.** O idioma
+   `defer func() { _ = x.Close() }()` é a forma padrão de documentar descarte
+   deliberado; exigir tratamento ali só produziria `nolint` espalhado.
+
+4. **A verificação de arquitetura usa `go/build` da biblioteca padrão**, não
+   `golang.org/x/tools/go/packages`. O módulo continua sem dependências de
+   terceiros, o que é ele próprio uma propriedade que a regra protege.
+
+5. **Exceção estreita para arquivos de teste na regra de dependência.** Podem
+   importar auxiliares de terceiros; **não** podem importar `adapter`,
+   `platform` ou `cmd`. Exigir cobertura de 90% no domínio sem auxiliares seria
+   restrição sem contrapartida, e é a segunda proibição que garante o
+   isolamento do núcleo.
+
+6. **A sonda de saúde é o próprio binário** (`-healthcheck`), não `curl`. A
+   imagem distroless não tem shell nem utilitários de rede, e acrescentá-los
+   pelo `HEALTHCHECK` desfaria a escolha da base.
+
+7. **Nenhuma cópia de bibliotecas no estágio de distribuição.** Seria
+   maquinário especulativo para a F5, não exercitado por código desta fase e
+   portanto não verificável. Em seu lugar, uma linha `ldd` no estágio de
+   construção registra a linha de base de dependências compartilhadas; a
+   diferença quando o MuPDF entrar é exatamente o que a F5 precisará tratar.
+
+### Estado do binário nesta fase
+
+Responde **404 em qualquer rota**, inclusive `/ping` — é o estado esperado,
+declarado nos critérios de aceite da fase. Consequência direta: o `HEALTHCHECK`
+da imagem reporta o contêiner como **não saudável** até a fase F9 registrar a
+rota. Documentado no `Dockerfile` e no comentário de `sondarSaude`.
+
+Verificado localmente:
+
+| Comando | Resultado |
+|---|---|
+| `-versao` | imprime a versão injetada, sai 0 |
+| `GET /ping`, `/pdf`, `/qualquer` | 404 |
+| `-healthcheck` | reporta 404 e sai 1 |
+| `SIGTERM` | encerra gracioso, sai 0 |
+
+### Verificação executada
+
+```
+make ci                                              lint 0 problemas, testes ok, build ok
+go test ./internal -run TestRegraDeDependencia        PASS
+  com violação de adaptador injetada                 FAIL, nomeando o pacote e a importação
+  com dependência de terceiros injetada              FAIL, nomeando o pacote e a importação
+```
+
+### ⚠ Ressalva de verificação — Docker
+
+**Não há daemon Docker neste ambiente.** As seguintes verificações da fase
+**não foram executadas** e permanecem pendentes:
+
+| Verificação | Estado |
+|---|---|
+| `docker build -f deploy/Dockerfile` | **não executada** |
+| Imagem final abaixo de 120 MB | **não verificada** |
+| Imagem roda sem privilégio | não verificada — declarado por `USER nonroot:nonroot` |
+| `docker run recorte-api:f1 -versao` | **não executada** |
+| `libmupdf-dev` e codecs existem em bookworm | **não verificado** |
+
+O `Dockerfile` e o trabalho `imagem` da integração contínua estão escritos e
+implementam essas verificações como portão — inclusive o limite de 120 MB e a
+recusa de usuário privilegiado. **A primeira execução da integração contínua é
+que vai validá-los.** Até lá, tratar o empacotamento como não verificado.
+
+### Pendências que entram na F2
+
+1. As de F0 continuam abertas: **D-15** e **D-11** (bloqueantes), **D-14**
+   (confirmar espelhamento agora, não em F12), **D-08** e **D-10** (captura
+   empírica barata que bloqueia F9).
+2. Validar o `Dockerfile` na primeira execução da integração contínua.
+3. `main.go` lê `SERVIDOR_IP` e `SERVIDOR_PORTA` diretamente, com padrões
+   embutidos. A F2 substitui isso por `internal/config` — **inclusive o
+   comportamento de porta inválida cair no padrão** (A19), que a leitura atual
+   não reproduz: hoje um valor não numérico chega ao `net.JoinHostPort` e a
+   escuta falha, em vez de cair em 6001.
+
+### Dependências novas
+
+Nenhuma. O módulo não tem dependências de terceiros ao fim da F1.

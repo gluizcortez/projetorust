@@ -1,0 +1,143 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # A extração de PDF depende de MuPDF via cgo (fase F5). A análise precisa
+  # enxergar os arquivos com cgo habilitado.
+  build-tags:
+    - integration
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    # --- disciplina de erro (invariante 6 do preâmbulo do projeto) ---
+    - errorlint # exige %w e errors.Is/As; proíbe comparação de erro por ==
+    - nilerr # retorno de nil quando o erro não é nil
+    - wrapcheck # erro de outro pacote precisa ser envolvido antes de sair
+
+    # --- disciplina de contexto (invariante 5) ---
+    - contextcheck # garante propagação de context.Context em vez de context.Background
+
+    # --- segurança (achados A01 e A02) ---
+    - gosec # varredura geral; pega credencial embutida e comparação insegura
+    - bodyclose # corpo de resposta HTTP não fechado
+
+    # --- exatidão numérica e de fluxo ---
+    - exhaustive # switch sobre StatusImportacao precisa cobrir os sete valores (F3)
+    - unconvert # conversão redundante mascara as estreitantes de INV-P15
+    - copyloopvar # semântica de variável de laço do Go 1.22+
+    - wastedassign
+
+    # --- disciplina de banco (fase F4) ---
+    - rowserrcheck # rows.Err() após iteração
+    - sqlclosecheck # fechamento de rows e statements
+
+    # --- estilo e documentação ---
+    - revive # comentário obrigatório em identificador exportado
+    - forbidigo # implementa as proibições do projeto — ver settings abaixo
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # check-blank fica desligado de propósito: `defer func() { _ = x.Close() }()`
+      # é o idioma para descarte deliberado, e o `_` explícito já documenta a
+      # intenção melhor do que uma exclusão espalhada por nolint.
+      check-blank: false
+
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # `panic` fora de cmd/ e das fronteiras de recover. A exclusão por
+        # caminho está em `exclusions.rules`, mais abaixo.
+        - pattern: ^panic$
+          msg: >-
+            pânico é proibido em caminho de execução normal. Devolva erro.
+            Exceções: cmd/, o middleware de recuperação e a fronteira da tarefa
+            de fundo — todas com exclusão explícita neste arquivo.
+        # Saída direta em vez de registro estruturado (achado A21).
+        - pattern: ^fmt\.Print.*$
+          msg: use log/slog com atributos, não impressão direta (achado A21)
+        - pattern: ^print(ln)?$
+          msg: use log/slog com atributos, não impressão direta
+        # O legado descarta o resultado de gravação de status com `let _ =`.
+        # Em Go isso vira erro ignorado, que o errcheck já pega; aqui barramos
+        # o atalho de silenciar time.Sleep como espera por evento (achado A14).
+        - pattern: ^time\.Sleep$
+          msg: >-
+            espera por sondagem é proibida. Use canal, sync.WaitGroup ou
+            context com prazo. Exceção: testes.
+
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck # nomes em português não sofrem do problema
+        - name: package-comments
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: indent-error-flow
+        - name: var-naming
+          arguments:
+            - []
+            - []
+            - - skip-package-name-checks: true # pacotes em português
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+
+  exclusions:
+    generated: lax
+    rules:
+      # cmd/ é a fronteira do processo: pode encerrar e pode imprimir.
+      - path: ^cmd/
+        linters: [forbidigo]
+
+      # O middleware de recuperação e a fronteira da tarefa de fundo existem
+      # justamente para conter pânico — precisam mencioná-lo.
+      - path: ^internal/adapter/httpapi/middleware/recover\.go$
+        linters: [forbidigo]
+      - path: ^internal/platform/worker/
+        linters: [forbidigo]
+
+      # Testes: podem entrar em pânico, imprimir, dormir e usar auxiliares.
+      - path: _test\.go$
+        linters: [forbidigo, gosec, wrapcheck, errcheck, contextcheck]
+
+      # O ferramental de apoio não é o serviço.
+      - path: ^tools/
+        linters: [forbidigo, gosec, wrapcheck, revive]
+
+# NOTA — linters avaliados e recusados
+#
+#   misspell  Só conhece inglês. Este repositório é escrito em português e o
+#             linter sinalizou "Comando"→"Commando", "Eles"→"Eels", "posicional"
+#             →"positional". Ruído puro, sem forma de configurar um dicionário
+#             pt-BR. Removido na fase F1 após medição.
+#
+#   depguard  Redundante com internal/arch_test.go, que já verifica a regra de
+#             dependência com mensagem de erro que nomeia o pacote infrator.
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/gluizcortez/projetorust
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

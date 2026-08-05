@@ -25,7 +25,7 @@ atrás de chave de configuração desligada por padrão.
 | Fase | Descrição | Estado |
 |---|---|---|
 | F0 | Especificação executável e corpus dourado | **concluída** com ressalvas (D-11, D-15) |
-| F1 | Fundação do repositório e cadeia de ferramentas | pendente |
+| F1 | Fundação do repositório e cadeia de ferramentas | **concluída** — empacotamento não verificado (sem Docker no ambiente) |
 | F2 | Configuração tipada e observabilidade | pendente |
 | F3 | Núcleo de domínio e portas | pendente |
 | F4 | Persistência | pendente |

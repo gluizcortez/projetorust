@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Obrigatório: a extração de PDF depende de MuPDF via cgo. Ver deploy/Dockerfile.
+  CGO_ENABLED: "1"
+
+jobs:
+  verificar:
+    name: lint · teste · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar dependências de compilação do MuPDF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libmupdf-dev \
+            libfreetype6-dev libjbig2dec0-dev libjpeg62-turbo-dev \
+            libopenjp2-7-dev libharfbuzz-dev zlib1g-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true # cache de módulos e de artefatos de compilação
+
+      # O cache do setup-go não cobre os objetos C do cgo, que são o custo
+      # dominante nesta compilação.
+      - name: Cache de artefatos C
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: cgo-${{ runner.os }}-${{ hashFiles('**/go.sum', 'deploy/Dockerfile') }}
+          restore-keys: cgo-${{ runner.os }}-
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.5.0
+          args: --timeout=5m
+
+      - name: Testes
+        run: go test ./... -race -shuffle=on -coverprofile=coverage.out -covermode=atomic
+
+      - name: Regra de dependência
+        run: go test ./internal -run TestRegraDeDependencia -v
+
+      - name: Relatório de cobertura
+        run: go tool cover -func=coverage.out | tail -40
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cobertura
+          path: coverage.out
+          retention-days: 14
+
+      - name: Build
+        run: make build
+
+      - name: go.mod está normalizado
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  imagem:
+    name: imagem de distribuição
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verificar
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construir
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: false
+          load: true
+          tags: recorte-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSAO=${{ github.sha }}
+            REVISAO=${{ github.sha }}
+
+      # Critérios de aceite da fase F1.
+      - name: Verificar tamanho, usuário e execução
+        run: |
+          set -euo pipefail
+
+          bytes=$(docker image inspect recorte-api:ci --format '{{.Size}}')
+          limite=$((120 * 1024 * 1024))
+          echo "tamanho: $(numfmt --to=iec "$bytes") (limite $(numfmt --to=iec "$limite"))"
+          if [ "$bytes" -gt "$limite" ]; then
+            echo "imagem acima do limite de 120 MB"
+            exit 1
+          fi
+
+          usuario=$(docker image inspect recorte-api:ci --format '{{.Config.User}}')
+          echo "usuário: ${usuario}"
+          case "$usuario" in
+            ""|root|0|0:0) echo "a imagem precisa rodar sem privilégio"; exit 1 ;;
+          esac
+
+          docker run --rm recorte-api:ci -versao
