@@ -872,3 +872,126 @@ CGO_ENABLED=0                              compila; pânico no arranque (registr
 |---|---|
 | `github.com/gen2brain/go-fitz` | Ligação Go para MuPDF, com a biblioteca embarcada estaticamente. É o mesmo motor C do legado, o que elimina a classe inteira de divergência de extração. |
 | `golang.org/x/net/html` | Tokenizador de HTML para remontar as linhas. Analisar HTML com expressão regular seria frágil; já era dependência indireta. |
+
+---
+
+## F6 — Normalização e tokenização com paridade
+
+**Status:** concluída · **Data:** 2026-08-05
+
+### Resultado
+
+| Verificação | Resultado |
+|---|---|
+| Normalização contra o corpus | **159 de 159** páginas idênticas byte a byte |
+| Tokenização contra o corpus | **159 de 159** páginas, 3.359 termos conferidos |
+| Teste de propriedade | **1.000.000** casos aleatórios, **zero** divergências |
+| Cobertura de `searchidx` | 100% |
+
+### Passo 1 — o limite confirmado NA FONTE
+
+A F0 já o tinha medido empiricamente. A F6 exigia confirmação na fonte, e ela
+veio de tantivy 0.22.1:
+
+```
+tokenizer_manager.rs:59-67   register("default",
+                               SimpleTokenizer → RemoveLongFilter::limit(40)
+                                               → LowerCaser)
+remove_long.rs:36            token.text.len() < self.token_length_limit
+remove_long.rs:28            "a limit in bytes of the UTF-8 representation"
+simple_tokenizer.rs:46       if c.is_alphanumeric()
+```
+
+Três fatos que a fonte torna explícitos: o valor é **40**; a comparação é `<`,
+então descarta `>= 40`; e `len()` conta **bytes**. Bate com a medição
+independente da F0 (`α`×19 indexado, `α`×20 não).
+
+### O teste de propriedade encontrou o que o corpus não pegou
+
+Esta é a lição da fase. As 159 páginas do corpus passaram **byte a byte** com a
+implementação errada. O teste de propriedade com um milhão de cadeias acusou
+**320.142 divergências — 32% dos casos**.
+
+Causa: `\w` do crate `regex` é `[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\p{Join_Control}]`,
+e meu padrão `[\p{L}\p{N}_]` errava **nos dois sentidos**:
+
+| Erro | Exemplo | Efeito |
+|---|---|---|
+| Perdia marcas combinantes | `"6"`+U+0327+`"-\n"` | legado junta, Go não juntava |
+| Incluía `No`/`Nl` a mais | `"¼-\n93"` | legado não junta, Go juntava |
+
+Catalogado como **INV-P22**. A recomendação que a INV-P02 fazia
+(`[\p{L}\p{N}_]`) foi marcada como **refutada** no próprio documento.
+
+### Três tabelas geradas, nenhuma escrita à mão
+
+`tools/gerar-tabela-diacriticos` percorre as 63.488 runas do plano básico
+multilíngue perguntando **ao próprio Rust** e emite só as divergências:
+
+| Decisão | Como o Rust é consultado | Divergências |
+|---|---|---|
+| Diacríticos | `diacritics::remove_diacritics` | 2.205 |
+| Segmentação de termos | `char::is_alphanumeric` | 1.265 |
+| Caractere de palavra | motor de regex com `^\w$` | 9 |
+
+Perguntar ao motor de expressões regulares em vez de reproduzir a definição por
+escrito foi o que tornou a terceira tabela confiável — a definição do `\w` é
+sutil o bastante para eu ter errado ao transcrevê-la.
+
+Valores que não teriam como ser adivinhados: `ß→s` (um s, não "ss") e `Æ→A`
+(não "AE").
+
+### Decisões tomadas
+
+1. **`JuntarHifens` não usa expressão regular.** O RE2 não expressa a classe
+   `\w` do Rust, que mistura a propriedade `Alphabetic` com categorias. A
+   varredura é manual e preserva a semântica de `replace_all`: busca da
+   esquerda para a direita, e após uma substituição a varredura recomeça
+   **depois** do trecho consumido — sem isso, `"a-\n-\nb"` daria resultado
+   diferente do legado.
+
+2. **A conversão de diacríticos é por runa**, como a da crate: consulta a
+   tabela de exceções e, quando não está nela, usa a decomposição canônica.
+
+3. **`Tokenizar` é uma só função** para indexar e para analisar consulta, como
+   o `QueryParser` do legado faz. Duas implementações divergiriam em silêncio.
+
+4. **O descarte por comprimento vem antes das minúsculas**, como na cadeia do
+   Tantivy. Para alguns caracteres a conversão muda o número de bytes, então a
+   ordem é observável.
+
+### Custo medido
+
+| Operação | Resultado |
+|---|---|
+| `Tokenizar` | **53,3 MB/s** — 13,6 ms por MiB, 57 mil alocações |
+
+As alocações vêm de `strings.ToLower` nos termos que têm maiúscula; termos já
+em minúsculas não alocam, pelo caminho rápido da biblioteca padrão.
+
+### Verificação executada
+
+```
+go generate ./...                              tabelas reproduzidas sem alteração
+go test ./test/parity/ -run TestNormalizacao   159/159 páginas
+go test ./test/parity/ -run TestTokenizacao    159/159 páginas, 3.359 termos
+go test ./test/parity/ -run TestPropriedade    1.000.000 casos, zero divergências
+  com [\p{L}\p{N}_] no lugar                   320.142 divergências
+go test ./internal/adapter/searchidx/ -cover   100%
+go test -bench=Tokenizar                       53,3 MB/s
+```
+
+### Pendências que entram na F7
+
+1. **D-15** ganhou peso de novo: as três tabelas e o limite de 40 bytes valem
+   para tantivy 0.22.1 e diacritics 0.2.2. Alinhar o `Cargo.lock` de produção e
+   reexecutar `go generate` é o procedimento de reconfirmação.
+2. **D-11** segue bloqueante.
+3. **INV-P10** continua sem exercício (herdado da F5).
+4. As demais de F0: **D-14**, **D-08**, **D-10**, **D-13**.
+
+### Dependências novas
+
+| Dependência | Justificativa |
+|---|---|
+| `golang.org/x/text` | `norm.NFD`/`NFC` e `runes.Remove` para a decomposição canônica. Era dependência indireta; passou a direta. |

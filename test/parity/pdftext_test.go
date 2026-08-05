@@ -24,6 +24,11 @@ type paginasEsperadas struct {
 	Paginas      []string `json:"paginas"`
 }
 
+// jsonUnmarshal centraliza a decodificação usada pelos harnesses de paridade.
+func jsonUnmarshal(dados []byte, alvo any) error {
+	return json.Unmarshal(dados, alvo)
+}
+
 func carregarOraculos(t *testing.T, sufixo string) []paginasEsperadas {
 	t.Helper()
 	arquivos, err := filepath.Glob(filepath.Join(dirEsperado, "*"+sufixo))

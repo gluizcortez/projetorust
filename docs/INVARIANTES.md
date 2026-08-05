@@ -33,6 +33,7 @@
 | INV-P19 | Expressão acentuada nunca casa | F7 | Alta |
 | INV-P20 | PDF truncado conclui com sucesso e zero recortes | F5 | Alta |
 | INV-P21 | Análise de data do chrono é mais permissiva que a do Go | F3 | Crítica |
+| INV-P22 | Classe de caracteres do Rust diverge da do Go nos dois sentidos | F6 | Crítica |
 
 ---
 
@@ -124,7 +125,14 @@ Essa é a característica traiçoeira desta invariante: um teste montado com
 palavras terminadas em consoante ASCII passa nas duas implementações. O corpus
 sintético cobre o caso real em `04-inv-p02-hifen-acentuado.pdf`.
 
-**Padrão correto em Go.** `(?im)([\p{L}\p{N}_]+)(-\n)`.
+**Padrão correto em Go.** ⚠ **NÃO EXISTE.** Esta seção recomendava
+`(?im)([\p{L}\p{N}_]+)(-\n)` até a fase F6, e o teste de propriedade a
+**refutou** em 320.142 de um milhão de casos: `\p{L}\p{N}` perde as marcas
+combinantes e inclui as categorias `No`/`Nl` a mais. Ver **INV-P22**.
+
+A junção não usa expressão regular na implementação: o RE2 não tem como
+expressar a classe `\w` do Rust, que mistura a propriedade `Alphabetic` com
+categorias. A varredura é manual, com a classe medida em `palavra_table.go`.
 
 ---
 
@@ -830,3 +838,81 @@ numérico** e não antes do `-` literal. Daí `2024- 03-15` passar e
 **Implementação.** `domain.AnalisarData` reproduz a gramática medida. O teste
 `TestAnalisarDataDivergeDeTimeParse` falha se alguém "simplificar" a função
 para `time.Parse`, e explica o motivo na mensagem.
+
+---
+
+## INV-P22 — As classes de caracteres do Rust divergem das do Go nos dois sentidos
+
+**Descrição.** Duas decisões por caractere governam o pipeline, e **nenhuma das
+duas** tem equivalente direto em Go. Pior: as diferenças vão nos **dois
+sentidos**, então nenhuma aproximação simples acerta.
+
+### 22.1 — `\w` da junção de hífens
+
+O legado usa `(?imx)(\w+)(-\n)` (`main.rs:487`). No crate `regex`, `\w` é
+`[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\p{Join_Control}]`.
+
+| Candidato em Go | Erro |
+|---|---|
+| `\w` do RE2 | ASCII puro — perde toda letra acentuada (INV-P02) |
+| `[\p{L}\p{N}_]` | **perde marcas combinantes** e **inclui `No`/`Nl` a mais** |
+
+**Caso positivo** — o legado JUNTA e `[\p{L}\p{N}_]` não juntaria:
+
+| Entrada | Resultado no legado |
+|---|---|
+| `"6"` + U+0327 (cedilha combinante) + `"-\n"` + `"x"` | junta → `6̧x` |
+| U+0303 (til combinante) + `"-\n"` + `"l"` | junta → `̃l` |
+
+`\p{M}` faz parte de `\w` no Rust; `\p{L}` e `\p{N}` do Go não cobrem marcas.
+
+**Caso negativo** — o legado NÃO junta e `[\p{L}\p{N}_]` juntaria:
+
+| Entrada | Resultado no legado |
+|---|---|
+| `"¼"` + `"-\n"` + `"93"` | **não junta** → `¼-\n93` |
+| `"½"` + `"-\n"` + `"x"` | **não junta** |
+
+`\p{N}` do Go inclui `No` (frações e expoentes); o `\w` do Rust só inclui `Nd`.
+
+### 22.2 — `is_alphanumeric` da segmentação de termos
+
+O `SimpleTokenizer` do Tantivy quebra em `!c.is_alphanumeric()`
+(`simple_tokenizer.rs:46`). No Rust isso é `Alphabetic ∪ {Nd, Nl, No}`; em Go,
+`unicode.IsLetter || unicode.IsDigit` é `L ∪ Nd`.
+
+**Caso positivo** — um único termo no legado:
+
+| Texto | Termos no legado | Termos com `IsLetter\|\|IsDigit` |
+|---|---|---|
+| `m²` | `m²` | `m` |
+| `½kg` | `½kg` | `kg` |
+| `capítuloⅧ` | `capítuloⅷ` | `capítulo` |
+
+**Relevância prática.** Área em `m²` é comum em extratos de contrato e editais
+de obra. Uma expressão de perfil cadastrada como `350 M2` já não casaria, mas
+o termo indexado muda de `m²` para `m` — o que altera o índice inteiro.
+
+### Como foram resolvidas
+
+**Nenhuma das duas foi escrita à mão.** `tools/gerar-tabela-diacriticos`
+percorre todas as runas do plano básico multilíngue perguntando ao próprio
+Rust — ao motor de expressões regulares para `\w`, e a `char::is_alphanumeric`
+para a segmentação — e emite apenas as divergências:
+
+| Tabela | Divergências | Arquivo gerado |
+|---|---|---|
+| `\w` da junção de hífens | 9 | `internal/adapter/pdftext/palavra_table.go` |
+| Segmentação alfanumérica | 1.265 | `internal/adapter/searchidx/alfanumerico_table.go` |
+| Diacríticos (INV-P07) | 2.205 | `internal/adapter/pdftext/diacriticos_table.go` |
+
+### Como isto foi descoberto
+
+**O corpus não pegou.** As 159 páginas passaram byte a byte com a
+implementação errada. Foi o **teste de propriedade** com um milhão de cadeias
+aleatórias que acusou **320.142 divergências** — 32% dos casos — e os exemplos
+apontaram direto para as duas causas.
+
+É a justificativa concreta para o teste de propriedade ser critério de aceite
+da fase, e não opcional: nenhum corpus realista contém `¼-\n` nem `6̧-\n` em
+volume suficiente para que a falha apareça.

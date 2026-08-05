@@ -8,3 +8,8 @@
 //
 // Este pacote NÃO indexa e NÃO busca. Preenchido nas fases F5 e F6.
 package pdftext
+
+// As tabelas de exceção Unicode são geradas comparando o Go com o próprio
+// Rust, runa a runa. Ver tools/gerar-tabela-diacriticos.
+//
+//go:generate sh -c "cd ../../.. && cargo build --release --quiet --manifest-path tools/gerar-tabela-diacriticos/dump/Cargo.toml && tools/gerar-tabela-diacriticos/dump/target/release/dump-unicode > /tmp/unicode.tsv && go run ./tools/gerar-tabela-diacriticos /tmp/unicode.tsv"

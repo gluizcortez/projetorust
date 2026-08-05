@@ -30,7 +30,7 @@ atrás de chave de configuração desligada por padrão.
 | F3 | Núcleo de domínio e portas | **concluída** |
 | F4 | Persistência | **concluída** |
 | F5 | Extração de texto do PDF | **concluída** — 159/159 páginas idênticas |
-| F6 | Normalização e tokenização | pendente |
+| F6 | Normalização e tokenização | **concluída** — 1M casos sem divergência |
 | F7 | Índice e busca | pendente |
 | F8 | Pipeline e máquina de estados | pendente |
 | F9 | Camada HTTP | pendente |
