@@ -29,7 +29,7 @@ atrás de chave de configuração desligada por padrão.
 | F2 | Configuração tipada e observabilidade | **concluída** |
 | F3 | Núcleo de domínio e portas | **concluída** |
 | F4 | Persistência | **concluída** |
-| F5 | Extração de texto do PDF | pendente |
+| F5 | Extração de texto do PDF | **concluída** — 159/159 páginas idênticas |
 | F6 | Normalização e tokenização | pendente |
 | F7 | Índice e busca | pendente |
 | F8 | Pipeline e máquina de estados | pendente |

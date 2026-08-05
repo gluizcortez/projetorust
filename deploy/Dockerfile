@@ -3,42 +3,46 @@
 # Imagem de distribuição do serviço de recorte.
 #
 # ------------------------------------------------------------------------
-# POR QUE CGO_ENABLED=1 É OBRIGATÓRIO AQUI
+# POR QUE CGO_ENABLED=1 É OBRIGATÓRIO AQUI  (resolvido na fase F5)
 # ------------------------------------------------------------------------
-# A extração de texto do PDF usa MuPDF, uma biblioteca C. Não existe
-# implementação em Go puro que reproduza a varredura blocos → linhas →
-# caracteres com a fidelidade que a paridade exige (ver docs/INVARIANTES.md,
-# INV-P09 e INV-P11).
+# A extração de texto usa MuPDF, biblioteca C, via github.com/gen2brain/go-fitz.
+# Não existe implementação em Go puro que reproduza a varredura
+# blocos → linhas → caracteres com a fidelidade que a paridade exige
+# (docs/INVARIANTES.md, INV-P09 e INV-P11).
 #
-# Consequências que este arquivo precisa acomodar:
-#   - o binário não é estático por padrão, então a imagem final precisa da
-#     libc e das bibliotecas compartilhadas que sobrarem da ligação;
-#   - a compilação cruzada deixa de ser trivial: o estágio de construção roda
-#     na mesma arquitetura da imagem final;
-#   - o cache de artefatos C importa mais que o de módulos Go — MuPDF é grande.
+# O go-fitz EMBARCA o MuPDF como biblioteca estática (libmupdf_linux_amd64.a e
+# libmupdfthird_linux_amd64.a, ~22 MB). Duas consequências, ambas medidas na
+# fase F5:
 #
-# A fase F5 decide a forma final de provisionar o MuPDF (pacote da distribuição
-# contra compilação a partir do fonte, fixada na versão de produção). Até lá
-# este arquivo estabelece a estrutura e é intencionalmente conservador.
+#   1. NÃO é preciso instalar libmupdf-dev nem os codecs. O estágio de
+#      construção precisa apenas de um compilador C, que a imagem golang já
+#      traz.
+#   2. O binário resultante depende SOMENTE de libc em tempo de execução:
+#
+#          $ ldd recorte-api
+#          linux-vdso.so.1
+#          libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6
+#          /lib64/ld-linux-x86-64.so.2
+#
+#      Nada a copiar para o estágio de distribuição — a rota (a) prevista na
+#      fase F1 se confirmou.
+#
+# ARMADILHA — NÃO troque para CGO_ENABLED=0.
+# O binário COMPILA, e entra em pânico no arranque:
+#
+#     panic: cannot load library: libmupdf.so: cannot open shared object file
+#
+# Sem cgo, o go-fitz recorre ao purego e passa a exigir um libmupdf.so
+# COMPARTILHADO em tempo de execução, que a imagem não tem. A falha não
+# aparece na compilação, só na primeira extração.
 # ------------------------------------------------------------------------
 
 # ============================ construção ============================
 FROM golang:1.24-bookworm AS construcao
 
-# Dependências de compilação do MuPDF. Fixadas por nome, não por versão: a
-# fixação por versão entra em F5, junto com a decisão de origem do MuPDF.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        pkg-config \
-        libmupdf-dev \
-        libfreetype6-dev \
-        libjbig2dec0-dev \
-        libjpeg62-turbo-dev \
-        libopenjp2-7-dev \
-        libharfbuzz-dev \
-        zlib1g-dev
+# A imagem golang já traz gcc e libc-dev, que é tudo de que a ligação estática
+# do MuPDF embarcado no go-fitz precisa. Nenhum pacote de MuPDF é instalado —
+# ver o cabeçalho.
 
 WORKDIR /src
 
@@ -63,30 +67,21 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
         -o /out/recorte-api \
         ./cmd/recorte-api
 
-# Registra as bibliotecas compartilhadas de que o binário depende. Nesta fase a
-# lista deve conter apenas libc e o carregador dinâmico, ambos presentes na
-# imagem base — nada a copiar. A saída fica no log de construção como linha de
-# base: quando a F5 introduzir a ligação com o MuPDF, a diferença nesta lista é
-# exatamente o que a etapa de distribuição passará a precisar.
-RUN ldd /out/recorte-api || true
+# Confere que o binário não ganhou dependências compartilhadas além de libc e
+# do carregador dinâmico — as duas que a imagem de distribuição fornece.
+# Qualquer outra entrada aqui quebraria a imagem final em tempo de execução, e
+# é melhor descobrir na construção.
+RUN ldd /out/recorte-api && \
+    ! ldd /out/recorte-api | grep -vE 'linux-vdso|libc\.so|ld-linux|statically linked' | grep -q '=>'
+
 
 # ============================ distribuição ============================
 # distroless: sem shell, sem gerenciador de pacotes, sem utilitários. A imagem
 # `base` traz a libc e o carregador dinâmico, necessários porque o binário é
 # compilado com cgo.
 #
-# PENDÊNCIA DA FASE F5 — provisionamento do MuPDF
-#
-# Assim que a extração de texto entrar, o binário passará a depender das
-# bibliotecas do MuPDF e de seus codecs. Duas rotas, a decidir em F5:
-#   (a) ligação estática do MuPDF no binário — nada muda aqui;
-#   (b) ligação dinâmica — este estágio precisa copiar as bibliotecas do
-#       estágio de construção e definir LD_LIBRARY_PATH.
-# A rota (a) é preferível justamente por manter esta camada trivial.
-#
-# Deliberadamente NÃO antecipamos a cópia de bibliotecas: seria maquinário
-# especulativo, não exercitado por nenhum código desta fase, e portanto não
-# verificável. A linha `ldd` acima é a medição que informará a decisão.
+# A fase F5 confirmou a rota (a): o MuPDF é ligado estaticamente ao binário e
+# não há biblioteca alguma a copiar para cá.
 FROM gcr.io/distroless/base-debian12:nonroot AS distribuicao
 
 COPY --from=construcao /out/recorte-api /recorte-api
@@ -99,9 +94,9 @@ EXPOSE 6001
 
 # A sonda é o próprio binário: sem shell na imagem, não há curl nem wget.
 #
-# ATENÇÃO — estado esperado na fase F1: não há manipuladores registrados, então
-# /ping responde 404 e o contêiner é marcado como não saudável. A fase F9
-# registra a rota e a sonda passa a obter 200. Ver os critérios de aceite da F1.
+# ATENÇÃO — estado esperado até a fase F9: não há manipuladores registrados,
+# então /ping responde 404 e o contêiner é marcado como não saudável. A F9
+# registra a rota e a sonda passa a obter 200.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/recorte-api", "-healthcheck"]
 

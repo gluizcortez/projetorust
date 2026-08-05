@@ -358,6 +358,54 @@ DOCUMENTOS = {
             ]
         ],
     },
+    # ---- adversarial: estressa a estratégia de extração (fase F5) ---------
+    "23-f5-caracteres-de-marcacao": {
+        "descricao": (
+            "Texto contendo <, >, & e aspas — caracteres que a saída HTML do "
+            "MuPDF precisa escapar e o extrator precisa desescapar sem perder "
+            "nem inventar bytes (fase F5)."
+        ),
+        "paginas": [
+            [
+                CABECALHO,
+                "",
+                "Contratada: ACME & FILHOS <LTDA>",
+                'Processo "administrativo" no 5<7',
+                "Comparativo: a > b && c < d",
+                '<p style="top:1pt">isto nao e uma tag</p>',
+                "Entidades literais: &amp; &lt; &gt; &quot; &#65;",
+            ]
+        ],
+    },
+    "24-f5-linhas-coladas": {
+        "descricao": (
+            "Linhas com espaçamento de 2pt, 4pt e 6pt — força o agrupamento de "
+            "linhas do MuPDF a decidir onde termina cada linha (fase F5)."
+        ),
+        "paginas": ["LINHAS_COLADAS"],
+    },
+    "25-f5-mesma-linha-varios-desenhos": {
+        "descricao": (
+            "Vários trechos desenhados na MESMA coordenada vertical, em "
+            "posicoes horizontais distintas — o MuPDF deve uni-los em uma "
+            "unica linha (fase F5)."
+        ),
+        "paginas": ["MESMA_LINHA"],
+    },
+    "26-f5-ordem-de-desenho-invertida": {
+        "descricao": (
+            "Linhas desenhadas de baixo para cima — a ordem do fluxo de "
+            "conteudo do PDF nao corresponde a ordem visual (fase F5)."
+        ),
+        "paginas": ["ORDEM_INVERTIDA"],
+    },
+    "27-f5-tamanhos-mistos": {
+        "descricao": (
+            "Tamanhos de fonte diferentes na mesma pagina e na mesma linha — "
+            "o MuPDF pode quebrar em spans distintos (fase F5)."
+        ),
+        "paginas": ["TAMANHOS_MISTOS"],
+    },
     # ---- volume ----------------------------------------------------------
     "18-volume-120-paginas": {
         "descricao": "Documento longo — desempenho, memória e numeração de páginas.",
@@ -464,6 +512,47 @@ def desenhar_coluna(c, linhas, x, y):
     return y
 
 
+def desenhar_especial(c, tipo):
+    """Layouts adversariais que exigem controle fino de posicionamento."""
+    y = ALTURA - MARGEM_TOPO
+    if tipo == "LINHAS_COLADAS":
+        c.drawString(MARGEM_ESQ, y, CABECALHO)
+        y -= 24
+        for espaco in (2, 4, 6, 16):
+            for i in range(3):
+                c.drawString(MARGEM_ESQ, y, f"espacamento {espaco}pt linha {i + 1} JOAO SILVA")
+                y -= espaco
+            y -= 20
+    elif tipo == "MESMA_LINHA":
+        c.drawString(MARGEM_ESQ, y, CABECALHO)
+        y -= 30
+        c.drawString(MARGEM_ESQ, y, "JOAO")
+        c.drawString(MARGEM_ESQ + 60, y, "SILVA")
+        c.drawString(MARGEM_ESQ + 130, y, "matricula 44521")
+        y -= 24
+        c.drawString(MARGEM_ESQ, y, "ACME")
+        c.drawString(MARGEM_ESQ + 55, y, "&")
+        c.drawString(MARGEM_ESQ + 75, y, "FILHOS")
+    elif tipo == "ORDEM_INVERTIDA":
+        linhas = [CABECALHO, "", "primeira linha visual JOAO SILVA",
+                  "segunda linha visual", "terceira linha visual"]
+        posicoes = [y - i * ENTRELINHA for i in range(len(linhas))]
+        for texto, py in reversed(list(zip(linhas, posicoes))):
+            if texto:
+                c.drawString(MARGEM_ESQ, py, texto)
+    elif tipo == "TAMANHOS_MISTOS":
+        c.drawString(MARGEM_ESQ, y, CABECALHO)
+        y -= 30
+        c.setFont(FONTE, 18)
+        c.drawString(MARGEM_ESQ, y, "TITULO GRANDE")
+        c.setFont(FONTE, 8)
+        c.drawString(MARGEM_ESQ + 130, y, "nota pequena na mesma linha")
+        y -= 26
+        c.setFont(FONTE, TAMANHO)
+        c.drawString(MARGEM_ESQ, y, "Contratada: ALFA CONSTRUCOES LTDA")
+        c.setFont(FONTE, TAMANHO)
+
+
 def gerar_pdf(caminho, paginas):
     c = canvas.Canvas(caminho, pagesize=A4, invariant=1)
     c.setCreator("gerar-corpus-sintetico")
@@ -473,7 +562,9 @@ def gerar_pdf(caminho, paginas):
 
     for pagina in paginas:
         c.setFont(FONTE, TAMANHO)
-        if isinstance(pagina, dict):
+        if isinstance(pagina, str):
+            desenhar_especial(c, pagina)
+        elif isinstance(pagina, dict):
             desenhar_coluna(c, pagina.get("esq", []), MARGEM_ESQ, ALTURA - MARGEM_TOPO)
             desenhar_coluna(c, pagina.get("dir", []), COLUNA_DIR, ALTURA - MARGEM_TOPO)
         else:

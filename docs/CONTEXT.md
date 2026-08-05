@@ -733,3 +733,142 @@ cobertura de internal/adapter/postgres              80,6%
 | Dependência | Justificativa |
 |---|---|
 | `github.com/jackc/pgx/v5` | Driver e pool. É o padrão de mercado para PostgreSQL em Go e o único com suporte nativo a `pgtype.Date`, necessário para INV-P16. |
+
+---
+
+## F5 — Extração de texto do PDF
+
+**Status:** concluída · **Data:** 2026-08-05
+
+### Resultado
+
+**159 de 159 páginas idênticas byte a byte** ao texto capturado do legado, em
+26 documentos. Relatório completo em `docs/F5-AVALIACAO-EXTRACAO.md`.
+
+### A avaliação encontrou um caminho que o roadmap não previa
+
+O roadmap desenhava três caminhos: (A) ligação existente, (B) *shim* em C sobre
+`fz_stext_page`, (C) extrator Rust como serviço lateral. A medição encontrou um
+quarto, melhor que A e que dispensa B e C.
+
+| Caminho | Páginas idênticas | Situação |
+|---|---|---|
+| A — `doc.Text()` | 20 de 154 | **reprovado** |
+| **A′ — `doc.HTML()` remontado** | **159 de 159** | **adotado** |
+| B — *shim* em C via cgo | — | desnecessário |
+| C — serviço lateral em Rust | — | desnecessário |
+
+**Por que `Text()` falha.** O `fz_print_stext_page_as_text` junta as linhas de
+um bloco com espaço e aplica a de-hifenização própria do MuPDF. O legado emite
+`\n` por linha. Não é cosmético: `conti-\n` + `nuacao` vira `continuacao` no
+legado (um termo) e `conti-nuacao` com `Text()` (dois termos, hífen é
+separador). A expressão `CONTINUACAO DO PROCESSO` gera recorte num caso e não
+no outro.
+
+**Por que `HTML()` funciona.** O escritor HTML do MuPDF emite **um `<p>` por
+linha do `fz_stext_page`** — exatamente a granularidade do laço do legado. E
+como o legado concatena as linhas sem separador entre blocos (INV-P09), a
+fronteira de bloco não é observável, então só a de linha precisa bater.
+
+### O corpus foi atacado antes de a estratégia ser aceita
+
+O corpus da F0 é gerado por reportlab, que desenha cada linha como objeto
+separado — a estratégia poderia funcionar por acidente. Cinco documentos foram
+acrescentados **para tentar quebrá-la**, e todos passaram:
+
+| Documento | Ataque |
+|---|---|
+| `23-f5-caracteres-de-marcacao` | `<`, `>`, `&`, aspas e entidades literais no texto |
+| `24-f5-linhas-coladas` | espaçamento de 2, 4 e 6 pt |
+| `25-f5-mesma-linha-varios-desenhos` | três `drawString` na mesma altura devem virar UMA linha |
+| `26-f5-ordem-de-desenho-invertida` | linhas desenhadas de baixo para cima |
+| `27-f5-tamanhos-mistos` | fontes de tamanhos diferentes na mesma linha |
+
+O caso `25` é o mais informativo: confirma que `<p>` ⟺ linha do `stext` é
+correspondência **estrutural**, não coincidência do gerador.
+
+### Decisões tomadas
+
+1. **Análise com tokenizador de HTML de verdade** (`golang.org/x/net/html`),
+   não expressão regular. Atributos de estilo do MuPDF contêm `:` e `;`, e o
+   texto da página pode conter `<`, `>` e `&` escapados. A ferramenta de
+   avaliação usa regex por ser descartável; o adaptador, não.
+
+2. **O extrator devolve texto BRUTO.** A normalização é a F6 e entra como
+   decorador, não como passo escondido aqui. É o que mantém uma falha de
+   extração distinguível de uma de normalização — no diagnóstico e no corpus
+   (`*.paginas-brutas.json` contra `*.paginas.json`).
+
+3. **`ExtratorTexto` ainda não está completo.** Até a F6, `ExtrairPaginas`
+   devolve texto sem normalizar. Registrado no comentário do tipo.
+
+### Empacotamento — a pendência da F1 está resolvida
+
+O `go-fitz` embarca o MuPDF estático (~22 MB), então:
+
+- o `Dockerfile` e a integração contínua **perderam** `libmupdf-dev` e os seis
+  pacotes de codecs;
+- o binário depende **só de libc** — nada a copiar para o estágio distroless;
+- a rota (a) prevista na F1 se confirmou.
+
+O `Dockerfile` ganhou uma verificação de `ldd` que falha a construção se o
+binário adquirir qualquer dependência compartilhada além de libc.
+
+### Armadilha registrada: `CGO_ENABLED=0` compila e quebra em execução
+
+Testado, e vale registro porque é silencioso:
+
+```
+$ CGO_ENABLED=0 go build ./cmd/recorte-api   # compila, binário estático
+$ ./recorte-api
+panic: cannot load library: libmupdf.so: cannot open shared object file
+```
+
+Sem cgo o `go-fitz` recorre ao `purego` e exige um `libmupdf.so`
+**compartilhado**. A falha não aparece na compilação. Documentado no
+`Dockerfile` e no fluxo de integração contínua.
+
+### Custo medido
+
+| Métrica | Valor |
+|---|---|
+| Documento de 120 páginas | **17,6 ms** |
+| Por página | ~0,15 ms |
+| Alocações | 708 KB, 1.802 por documento |
+| 200 extrações consecutivas | 3,17 s, heap estável (fator 0,73) |
+
+Sem vazamento: o MuPDF é biblioteca C e um documento não fechado vazaria
+memória que o coletor do Go não recupera. O `defer doc.Close()` é o que
+impede, e `TestVazamento` é o que prova.
+
+### Verificação executada
+
+```
+go run ./tools/avaliar-extracao            Text: 20/154 · HTML: 159/159
+go test ./test/parity/ -run TestExtracao   159 de 159 páginas idênticas
+  com a estratégia Text() no lugar         139 páginas apontadas como divergentes
+go test ./internal/adapter/pdftext/...     entrada inválida, contexto, concorrência
+  TestVazamento (200 iterações)            heap estável, fator 0,73
+  BenchmarkExtrairPaginas                  17,6 ms / 120 páginas
+CGO_ENABLED=0                              compila; pânico no arranque (registrado)
+```
+
+### Pendências que entram na F6
+
+1. **D-11 segue bloqueante** e ganhou peso: a paridade da extração está provada
+   contra corpus **sintético**. Diários reais têm digitalização, colunas
+   irregulares, tabelas, texto rotacionado e camada de OCR.
+2. **INV-P10 não foi exercitado**: nenhum documento do corpus tem glifo não
+   mapeável, então "caractere irrecuperável vira espaço" continua sem
+   verificação. Precisa de PDF real com fonte quebrada.
+3. A versão do `go-fitz` precisa ficar **fixada**: o formato de saída do
+   escritor HTML pode mudar entre versões. O teste de paridade na integração
+   contínua é a rede.
+4. As demais de F0: **D-15**, **D-14**, **D-08**, **D-10**, **D-13**.
+
+### Dependências novas
+
+| Dependência | Justificativa |
+|---|---|
+| `github.com/gen2brain/go-fitz` | Ligação Go para MuPDF, com a biblioteca embarcada estaticamente. É o mesmo motor C do legado, o que elimina a classe inteira de divergência de extração. |
+| `golang.org/x/net/html` | Tokenizador de HTML para remontar as linhas. Analisar HTML com expressão regular seria frágil; já era dependência indireta. |

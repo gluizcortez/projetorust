@@ -126,6 +126,41 @@
     "crc32": "f6ef2aac"
   },
   {
+    "documento": "23-f5-caracteres-de-marcacao",
+    "descricao": "Texto contendo <, >, & e aspas — caracteres que a saída HTML do MuPDF precisa escapar e o extrator precisa desescapar sem perder nem inventar bytes (fase F5).",
+    "total_paginas": 1,
+    "bytes": 22795,
+    "crc32": "b42cb0e6"
+  },
+  {
+    "documento": "24-f5-linhas-coladas",
+    "descricao": "Linhas com espaçamento de 2pt, 4pt e 6pt — força o agrupamento de linhas do MuPDF a decidir onde termina cada linha (fase F5).",
+    "total_paginas": 1,
+    "bytes": 22716,
+    "crc32": "75c40c01"
+  },
+  {
+    "documento": "25-f5-mesma-linha-varios-desenhos",
+    "descricao": "Vários trechos desenhados na MESMA coordenada vertical, em posicoes horizontais distintas — o MuPDF deve uni-los em uma unica linha (fase F5).",
+    "total_paginas": 1,
+    "bytes": 22667,
+    "crc32": "f58f6a04"
+  },
+  {
+    "documento": "26-f5-ordem-de-desenho-invertida",
+    "descricao": "Linhas desenhadas de baixo para cima — a ordem do fluxo de conteudo do PDF nao corresponde a ordem visual (fase F5).",
+    "total_paginas": 1,
+    "bytes": 22660,
+    "crc32": "fc889896"
+  },
+  {
+    "documento": "27-f5-tamanhos-mistos",
+    "descricao": "Tamanhos de fonte diferentes na mesma pagina e na mesma linha — o MuPDF pode quebrar em spans distintos (fase F5).",
+    "total_paginas": 1,
+    "bytes": 22690,
+    "crc32": "f6c59e3b"
+  },
+  {
     "documento": "18-volume-120-paginas",
     "descricao": "Documento longo — desempenho, memória e numeração de páginas.",
     "total_paginas": 120,

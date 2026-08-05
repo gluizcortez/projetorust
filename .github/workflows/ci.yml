@@ -9,7 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Obrigatório: a extração de PDF depende de MuPDF via cgo. Ver deploy/Dockerfile.
+  # OBRIGATÓRIO. O go-fitz embarca o MuPDF como biblioteca estática e só a usa
+  # com cgo. Com CGO_ENABLED=0 o binário COMPILA e entra em pânico no arranque
+  # procurando um libmupdf.so compartilhado. Ver deploy/Dockerfile.
   CGO_ENABLED: "1"
 
 jobs:
@@ -37,14 +39,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Instalar dependências de compilação do MuPDF
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libmupdf-dev \
-            libfreetype6-dev libjbig2dec0-dev libjpeg62-turbo-dev \
-            libopenjp2-7-dev libharfbuzz-dev zlib1g-dev
 
       - uses: actions/setup-go@v5
         with:
