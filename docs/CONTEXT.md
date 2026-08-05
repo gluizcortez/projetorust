@@ -582,3 +582,154 @@ go test ./internal/domain/... -race -cover          96,6%
 ### Dependências novas
 
 Nenhuma. O núcleo importa apenas a biblioteca padrão.
+
+---
+
+## F4 — Persistência: pgx, consultas literais e unidade de trabalho
+
+**Status:** concluída · **Data:** 2026-08-05
+
+### Entregáveis
+
+| Artefato | Caminho |
+|---|---|
+| Pool com parâmetros explícitos | `internal/adapter/postgres/pool.go` |
+| Consultas embutidas | `internal/adapter/postgres/queries/*.sql` (7 arquivos) |
+| Carregador e paridade textual | `internal/adapter/postgres/queries.go` |
+| Executor resolvido por contexto | `internal/adapter/postgres/consultador.go` |
+| Unidade de trabalho | `internal/adapter/postgres/uow.go` |
+| Repositórios | `importacao_repo.go`, `perfil_repo.go`, `recorte_repo.go` |
+| Migração de linha de base | `db/migrations/0001_baseline.sql` |
+| Testes de integração | `integracao_test.go` — 16 testes |
+
+Cobertura do pacote: **80,6%** (critério: acima de 75%).
+
+### Divergência do passo 1
+
+O prompt fala em "cinco consultas"; o `main.rs` tem **sete** — e a
+`ESPECIFICACAO.md` §2.5 já as listava todas. Transcritas as sete. Divergência
+aditiva, registrada em vez de bloquear.
+
+### Paridade textual das consultas
+
+As sete são **byte a byte idênticas** aos literais do `main.rs`, incluindo
+espaços à direita (`recorte.tb_perfil_variacao tpv ` tem um) e a indentação da
+linha de fechamento.
+
+Os arquivos `.sql` têm cabeçalho explicativo separado por um marcador; o
+carregador descarta tudo até ele, então o que chega ao PostgreSQL é o literal
+puro. `TestCabecalhoNaoVazaParaOBanco` garante isso.
+
+**Verificado que o teste morde:** alterei `ORDER BY tpv.expressao_nm` para
+`DESC` e ele apontou o byte 687 com o contexto dos dois lados.
+
+### Decisões tomadas
+
+1. **Transação por CHAMADA de `Salvar`, não por importação.** É a decisão mais
+   consequente da fase. O legado chama `salvar_recorte` uma vez por chave, e
+   esse escopo preserva exatamente o que sobrevive a uma falha no meio
+   (INV-P14): as chaves já gravadas permanecem, a que falhou não deixa nada, as
+   seguintes não são processadas. Transação por importação reverteria as
+   anteriores e mudaria o estado final — por isso é evolução da F11.
+
+2. **A transação viaja no contexto**, resolvida por `base.consultador(ctx)`.
+   Mantém as portas do domínio livres de qualquer conceito de banco.
+
+3. **Aninhamento reaproveita a transação corrente** em vez de abrir outra. O
+   escopo é decisão de quem chama `EmTransacao`; aninhar em silêncio mudaria o
+   que sobrevive a uma falha.
+
+4. **Nenhum `AfterConnect` define `search_path`.** Todas as consultas
+   qualificam `recorte.` explicitamente e D-12 ainda não indicou configuração
+   por papel ou banco. O ponto de extensão está comentado em `pool.go`.
+
+5. **Migração de linha de base só verifica.** Emitir `CREATE`/`ALTER` a partir
+   de uma reconstrução marcada como `INFERIDO` (D-13) arriscaria alterar um
+   banco de produção com base em palpite. A migração lista as 7 tabelas e 30
+   colunas e falha nomeando o que falta.
+
+6. **`pgtype.Date` com `time.Date(..., time.UTC)`.** Nunca o fuso local — é o
+   que evita o deslocamento de um dia de INV-P16.
+
+### Desvio deliberado: sem testcontainers
+
+O prompt pedia testcontainers-go. **Não há daemon Docker neste ambiente**, e
+testcontainers exige um. Entregar testes que não podem ser executados seria
+pior do que a alternativa.
+
+Os testes leem `TEST_DATABASE_URL` e são pulados com mensagem explicativa
+quando ela falta. O banco vem de onde estiver disponível:
+
+| Contexto | Origem do banco |
+|---|---|
+| Este ambiente | `make pg-subir` — cluster PostgreSQL 16.13 local via `pg_ctl` |
+| Integração contínua | serviço `postgres:16` do GitHub Actions |
+| Máquina de quem desenvolve | qualquer PostgreSQL, via a variável |
+
+Testcontainers é apenas uma forma de **prover** um banco; o que os testes
+exercitam é idêntico. `make test-integration` sobe o cluster e roda tudo.
+
+### Achado A03 — demonstrado, não apenas corrigido
+
+`TestIntegracaoFalhaNoSegundoInsertNaoDeixaOrfao` cria um gatilho que faz o
+`INSERT` em `tb_recorte_texto` falhar.
+
+Para provar que o teste não passa por acaso, **substituí a transação pelo
+comportamento do legado** (dois INSERT independentes) e reexecutei:
+
+```
+--- FAIL: TestIntegracaoFalhaNoSegundoInsertNaoDeixaOrfao
+    ACHADO A03: 1 linha(s) órfã(s) em tb_recorte — a transação não reverteu
+```
+
+Com a transação: passa. O teste reproduz o defeito e comprova a correção.
+
+### Código morto removido
+
+Duas funções escritas por antecipação foram apagadas depois que os
+verificadores as apontaram: `dataDoTempo` (nenhum repositório lê data de volta)
+e `ErroEhNaoEncontrado` (nenhuma consulta pode devolver zero linhas hoje —
+`GET /importacao/{id}` é da F11). É o mesmo padrão do estágio de distribuição
+do `Dockerfile` na F1: maquinário especulativo não entra.
+
+### Parâmetros do pool — origem de cada número
+
+Reproduzem os padrões do SQLx, que é o que o legado usa via `Pool::connect`
+(`main.rs:85`), para não mudar a pressão sobre o banco antes da medição da F12.
+
+| Parâmetro | Valor | Origem |
+|---|---|---|
+| `MaxConns` | 10 | padrão do SQLx |
+| `MinConns` | 0 | padrão do SQLx |
+| `MaxConnLifetime` | 30 min | `max_lifetime` do SQLx |
+| `MaxConnIdleTime` | 10 min | `idle_timeout` do SQLx |
+| `ConnectTimeout` | 30 s | `acquire_timeout` do SQLx |
+| `HealthCheckPeriod` | 1 min | padrão do pgx; SQLx não tem equivalente |
+
+### Verificação executada
+
+```
+make ci                                             lint 0, testes ok, build ok
+go test ./internal/adapter/postgres/                paridade textual das 7 consultas: PASS
+  com ORDER BY adulterado                           FAIL apontando o byte 687
+make test-integration                               16/16 PASS contra PostgreSQL 16.13
+  com a transação removida                          FAIL: 1 linha órfã (reproduz A03)
+TZ=UTC / Asia/Tokyo / America/Sao_Paulo             INV-P16: mesma data nos três
+cobertura de internal/adapter/postgres              80,6%
+```
+
+### Pendências que entram na F5
+
+1. **D-13** ganhou urgência: `testdata/esquema_inferido.sql` é uma
+   reconstrução, e os testes de integração validam as consultas contra ela, não
+   contra o esquema real. Quando D-13 for respondida, o arquivo deve ser
+   trocado por um `pg_dump --schema-only` e qualquer divergência vira achado.
+2. As demais de F0 seguem: **D-15** e **D-11** (bloqueantes), **D-14**,
+   **D-08** e **D-10**.
+3. O `Dockerfile` continua **não verificado** — sem daemon Docker.
+
+### Dependências novas
+
+| Dependência | Justificativa |
+|---|---|
+| `github.com/jackc/pgx/v5` | Driver e pool. É o padrão de mercado para PostgreSQL em Go e o único com suporte nativo a `pgtype.Date`, necessário para INV-P16. |

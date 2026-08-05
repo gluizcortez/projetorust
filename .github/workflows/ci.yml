@@ -18,6 +18,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    services:
+      # Testes de integração da fase F4. Um serviço do próprio executor, em vez
+      # de testcontainers: dispensa daemon Docker acessível ao processo de
+      # teste e é a forma idiomática no GitHub Actions.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +71,18 @@ jobs:
 
       - name: Regra de dependência
         run: go test ./internal -run TestRegraDeDependencia -v
+
+      - name: Testes de integração
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: go test ./... -race -tags=integration -run 'Integration|Integracao' -v
+
+      # INV-P16: a data não pode deslocar um dia conforme o fuso do processo.
+      - name: Integração com fuso a leste de Greenwich
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          TZ: Asia/Tokyo
+        run: go test ./internal/adapter/postgres/... -tags=integration -run 'TestIntegracaoData' -v
 
       - name: Relatório de cobertura
         run: go tool cover -func=coverage.out | tail -40

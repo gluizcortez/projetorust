@@ -111,6 +111,13 @@ linters:
       - path: ^internal/platform/worker/
         linters: [forbidigo]
 
+      # A unidade de trabalho precisa repropagar o pânico DEPOIS de reverter a
+      # transação: engoli-lo esconderia o defeito, e não reverter prenderia a
+      # conexão até o tempo limite do pool. É a mesma classe de fronteira que
+      # as duas exclusões acima.
+      - path: ^internal/adapter/postgres/uow\.go$
+        linters: [forbidigo]
+
       # Testes: podem entrar em pânico, imprimir, dormir e usar auxiliares.
       - path: _test\.go$
         linters: [forbidigo, gosec, wrapcheck, errcheck, contextcheck]

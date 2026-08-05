@@ -16,7 +16,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint test test-integration parity build docker generate tidy tidy-check cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration parity build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
 ci: guarda-toolchain tidy-check lint test build
@@ -29,8 +29,33 @@ lint:
 test:
 	go test ./... -race -shuffle=on -coverprofile=coverage.out -covermode=atomic
 
+## pg-subir: sobe um PostgreSQL local para os testes de integração
+##   Não usa testcontainers: este ambiente não tem daemon Docker. Ver o
+##   cabeçalho de internal/adapter/postgres/integracao_test.go.
+PGBIN   := /usr/lib/postgresql/16/bin
+PGDATA  := /tmp/pgdata-recorte
+PGPORT  := 55432
+PGUSER  := pgtest
+export TEST_DATABASE_URL ?= postgres://postgres@localhost:$(PGPORT)/postgres?sslmode=disable
+
+pg-subir:
+	@if $(PGBIN)/pg_isready -h localhost -p $(PGPORT) >/dev/null 2>&1; then \
+		echo "PostgreSQL já responde na porta $(PGPORT)"; exit 0; \
+	fi; \
+	id -u $(PGUSER) >/dev/null 2>&1 || useradd -m $(PGUSER); \
+	rm -rf $(PGDATA); mkdir -p $(PGDATA); chown $(PGUSER) $(PGDATA); \
+	su $(PGUSER) -c "$(PGBIN)/initdb -D $(PGDATA) -U postgres --auth=trust --encoding=UTF8 --locale=C" >/dev/null; \
+	su $(PGUSER) -c "$(PGBIN)/pg_ctl -D $(PGDATA) -l /tmp/pg-recorte.log -o '-p $(PGPORT)' start"; \
+	$(PGBIN)/pg_isready -h localhost -p $(PGPORT)
+
+## pg-descer: encerra o PostgreSQL local
+pg-descer:
+	@su $(PGUSER) -c "$(PGBIN)/pg_ctl -D $(PGDATA) stop" 2>/dev/null || true
+
 ## test-integration: testes que exigem PostgreSQL real
-test-integration:
+##   Usa TEST_DATABASE_URL. Sem a variável, os testes são pulados com
+##   mensagem explicativa em vez de falharem.
+test-integration: pg-subir
 	go test ./... -race -tags=integration -run 'Integration|Integracao' -v
 
 ## parity: comparação contra o corpus dourado capturado do legado
