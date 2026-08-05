@@ -1,0 +1,16 @@
+{
+  "documento": "17-inv-p19-expressao-acentuada",
+  "sha256_pdf": "7bee5fa41f3f84535e6d751fee06dc9f6461f03c6b43042e3910d9dd05da2392",
+  "desfecho": "finalizado",
+  "total_recortes": 1,
+  "recortes": [
+    {
+      "ordem": 0,
+      "id_perfil": 13,
+      "expressao_busca": "CONCEICAO SOUZA",
+      "nr_pagina": 1,
+      "texto_sha256": "97b2c8ff616a5d1e62c65ee5bb2bf6ef075cae47f569e16d075c6176218c35ab",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nMARIA DA CONCEICAO SOUZA - matricula 90001\n"
+    }
+  ]
+}

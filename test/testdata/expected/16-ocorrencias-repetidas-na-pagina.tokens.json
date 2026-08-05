@@ -1,0 +1,33 @@
+{
+  "documento": "16-ocorrencias-repetidas-na-pagina",
+  "sha256_pdf": "81ba2a47b0b968229718bad277d3a426b88200d4616f715ce654aaa73d5f9308",
+  "total_paginas": 1,
+  "termos_por_pagina": [
+    [
+      "diario",
+      "oficial",
+      "do",
+      "municipio",
+      "edicao",
+      "sintetica",
+      "joao",
+      "silva",
+      "consta",
+      "na",
+      "linha",
+      "um",
+      "joao",
+      "silva",
+      "consta",
+      "na",
+      "linha",
+      "dois",
+      "joao",
+      "silva",
+      "consta",
+      "na",
+      "linha",
+      "tres"
+    ]
+  ]
+}

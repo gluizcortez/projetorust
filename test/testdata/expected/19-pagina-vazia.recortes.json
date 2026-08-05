@@ -1,0 +1,16 @@
+{
+  "documento": "19-pagina-vazia",
+  "sha256_pdf": "1c2681ed809850be75a5653ade2f65828254e747551d530ebeb63e64f1a8fee0",
+  "desfecho": "finalizado",
+  "total_recortes": 1,
+  "recortes": [
+    {
+      "ordem": 0,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 3,
+      "texto_sha256": "6f1d94eb91d179354b6d8fae229274334ab2d09ca80acd9d5eacd9d653dfd3b9",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ALFA CONSTRUCOES LTDA\n"
+    }
+  ]
+}

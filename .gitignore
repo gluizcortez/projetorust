@@ -1,0 +1,17 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Go
+/bin/
+*.test
+coverage.out
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Ferramental local
+/tmp/
+*.log

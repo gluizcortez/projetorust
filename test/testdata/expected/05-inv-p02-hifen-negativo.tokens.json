@@ -1,0 +1,32 @@
+{
+  "documento": "05-inv-p02-hifen-negativo",
+  "sha256_pdf": "1fc0d38c83669aad76ece147611d107ff9fa643fdaed2688b12293fe5d1bd243",
+  "total_paginas": 1,
+  "termos_por_pagina": [
+    [
+      "diario",
+      "oficial",
+      "do",
+      "municipio",
+      "edicao",
+      "sintetica",
+      "linha",
+      "terminada",
+      "em",
+      "hifen",
+      "isolado",
+      "continuacao",
+      "apos",
+      "hifen",
+      "isolado",
+      "linha",
+      "terminada",
+      "em",
+      "espaco",
+      "e",
+      "hifen",
+      "outra",
+      "continuacao"
+    ]
+  ]
+}

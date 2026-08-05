@@ -1,0 +1,39 @@
+[package]
+name = "capturar-corpus"
+version = "0.1.0"
+edition = "2021"
+description = "Captura o comportamento do serviço legado como corpus dourado de paridade (fase F0)."
+publish = false
+
+[[bin]]
+name = "capturar-corpus"
+path = "src/main.rs"
+
+# ATENÇÃO — ver docs/DECISOES-ABERTAS.md, D-15.
+#
+# As versões abaixo NÃO estão fixadas contra o Cargo.lock do serviço em
+# produção, porque ele ainda não foi disponibilizado. Enquanto isso não
+# acontecer, a saída deste binário NÃO tem valor normativo: o analisador léxico
+# do Tantivy, a tabela do `diacritics` e a extração do MuPDF podem divergir da
+# versão real (ver DECISOES-ABERTAS.md, D-03).
+#
+# As restrições refletem a API observada em `reference/main.rs`:
+#   - `TantivyDocument` e `ReloadPolicy::OnCommitWithDelay` indicam tantivy 0.22+
+#   - `tantivy::schema::Value` importado como trait indica 0.22+
+#
+# PROCEDIMENTO DE ALINHAMENTO (obrigatório antes de usar a saída como oráculo):
+#   1. obter o Cargo.lock do serviço em produção;
+#   2. copiar para cá as versões exatas de tantivy, mupdf, diacritics e regex;
+#   3. `cargo update -p <crate> --precise <versao>` para cada uma;
+#   4. registrar as versões em docs/CONTEXT.md e fechar D-03.
+
+[dependencies]
+tantivy = "0.22"
+mupdf = "0.4"
+diacritics = "0.2"
+regex = "1"
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"

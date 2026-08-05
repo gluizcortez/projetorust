@@ -1,0 +1,36 @@
+{
+  "documento": "12b-inv-p04-bytes-contra-runas",
+  "sha256_pdf": "c12101eb58ae465edb11b5b19ae4eb9eee2496cb73c0eee5389575dfeebea4ee",
+  "total_paginas": 1,
+  "termos_por_pagina": [
+    [
+      "diario",
+      "oficial",
+      "do",
+      "municipio",
+      "edicao",
+      "sintetica",
+      "grego",
+      "19",
+      "runas",
+      "38",
+      "bytes",
+      "ααααααααααααααααααα",
+      "grego",
+      "20",
+      "runas",
+      "40",
+      "bytes",
+      "grego",
+      "39",
+      "runas",
+      "78",
+      "bytes",
+      "grego",
+      "40",
+      "runas",
+      "80",
+      "bytes"
+    ]
+  ]
+}

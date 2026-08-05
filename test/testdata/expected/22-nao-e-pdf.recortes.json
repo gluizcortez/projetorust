@@ -1,0 +1,7 @@
+{
+  "documento": "22-nao-e-pdf",
+  "sha256_pdf": "32c3ec8c2c26373c1168556edb81b1c44eadfcf6bc3203c6306c4c0270e67108",
+  "desfecho": "erro_indexacao",
+  "detalhe": "MuPDF error, code: 2, message: no objects found",
+  "recortes": []
+}

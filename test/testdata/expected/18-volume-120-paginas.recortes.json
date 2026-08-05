@@ -1,0 +1,64 @@
+{
+  "documento": "18-volume-120-paginas",
+  "sha256_pdf": "7ea98829894e1940b29bca4df342caa0973b532e597528923afcd7da25e80c94",
+  "desfecho": "finalizado",
+  "total_recortes": 7,
+  "recortes": [
+    {
+      "ordem": 0,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 17,
+      "texto_sha256": "c4bd585447c8e099650b58ca1699fd5064a3f56de8bb1ea3ace4e690646d628a",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 017 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 1,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 34,
+      "texto_sha256": "40fac1e2359c9842a4664b84a3789aae316efb18d513627aefa45704c8948825",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 034 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 2,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 51,
+      "texto_sha256": "3cc2abbd65716a3b0ba9c6a6c051cd4fca550befcea7ea5ec80b7da51a267528",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 051 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 3,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 68,
+      "texto_sha256": "b1f1476d9c356e96a686f695fb19b47d3c346616597df8da0df9a4022eb34cc9",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 068 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 4,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 85,
+      "texto_sha256": "3793c51f6c60c6bf894357b7b461a8d99f243cafe559b14a2f686a0367a3ea46",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 085 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 5,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 102,
+      "texto_sha256": "d66d5895d0c92a01b26242b76b8d47b069fec3dce83afe3fcf49647292a6e7af",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 102 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 6,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 119,
+      "texto_sha256": "4687c56129273f2d4cc6972b39f93a4baf623b2d78a0ac8179e35ec1f850f8f1",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nPAGINA 119 DE 120\nTexto de preenchimento do diario oficial sintetico.\nContratada: ALFA CONSTRUCOES LTDA\n"
+    }
+  ]
+}

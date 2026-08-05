@@ -1,0 +1,32 @@
+{
+  "documento": "15-inv-p12-expressoes-paginas-distintas",
+  "sha256_pdf": "adb662037b77fafae964f565be187d5da42e7cebd87df46d5e2aea5518d1da46",
+  "desfecho": "finalizado",
+  "total_recortes": 3,
+  "recortes": [
+    {
+      "ordem": 0,
+      "id_perfil": 7,
+      "expressao_busca": "ALFA CONSTRUCOES",
+      "nr_pagina": 1,
+      "texto_sha256": "6f1d94eb91d179354b6d8fae229274334ab2d09ca80acd9d5eacd9d653dfd3b9",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ALFA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 1,
+      "id_perfil": 7,
+      "expressao_busca": "BETA CONSTRUCOES",
+      "nr_pagina": 2,
+      "texto_sha256": "1dbd83545cc2d895b2ef39951f1a32ceb5befa806eddd43a51055e8406cf41f6",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: BETA CONSTRUCOES LTDA\n"
+    },
+    {
+      "ordem": 2,
+      "id_perfil": 8,
+      "expressao_busca": "BETA CONSTRUCOES",
+      "nr_pagina": 2,
+      "texto_sha256": "1dbd83545cc2d895b2ef39951f1a32ceb5befa806eddd43a51055e8406cf41f6",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: BETA CONSTRUCOES LTDA\n"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "documento": "08-inv-p01-e-comercial",
+  "sha256_pdf": "0ad5f3a31226fbd2bd35e7963ed7712a6e43de0774db0dc48f49f27111a83b9e",
+  "desfecho": "finalizado",
+  "total_recortes": 3,
+  "recortes": [
+    {
+      "ordem": 0,
+      "id_perfil": 10,
+      "expressao_busca": "ACME & FILHOS",
+      "nr_pagina": 1,
+      "texto_sha256": "c52753ed26b0e3736ed548b81d9965353accf3f8eeedf4cec1ef2e337cf6781c",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ACME & FILHOS LTDA\n"
+    },
+    {
+      "ordem": 1,
+      "id_perfil": 10,
+      "expressao_busca": "ACME & FILHOS",
+      "nr_pagina": 2,
+      "texto_sha256": "090d6e863437938e08a4b421f505f9f804e81ed98b9b0bbae00cec7c66b4d7ff",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ACME&FILHOS LTDA\n"
+    },
+    {
+      "ordem": 2,
+      "id_perfil": 10,
+      "expressao_busca": "ACME & FILHOS",
+      "nr_pagina": 3,
+      "texto_sha256": "ebce881c7fb992b0e9c99a8d28c40f806d1739da4863ac60e77e77e5db3142c7",
+      "texto": "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ACME   &   FILHOS LTDA\n"
+    }
+  ]
+}
