@@ -5,6 +5,7 @@ MODULO      := github.com/gluizcortez/projetorust
 BINARIO     := recorte-api
 VERSAO      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISAO     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo desconhecida)
+GO_MINIMO   := 1.24.0
 IMAGEM      ?= recorte-api
 TAG         ?= $(VERSAO)
 
@@ -15,10 +16,10 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci lint test test-integration parity build docker generate tidy cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test test-integration parity build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
-ci: tidy lint test build
+ci: guarda-toolchain tidy-check lint test build
 
 ## lint: análise estática
 lint:
@@ -62,12 +63,43 @@ docker:
 generate:
 	go generate ./...
 
-## tidy: normaliza go.mod e go.sum, e falha se houver divergência
+## guarda-toolchain: impede que 'go get' eleve silenciosamente a versão exigida
+##   Um salto na diretriz `go` troca o toolchain em tempo de compilação, o que
+##   já quebrou a fase F2: a toolchain baixada automaticamente neste ambiente
+##   vem sem `covdata` e a cobertura para de funcionar. A diretriz é decisão de
+##   projeto, não efeito colateral de atualizar dependência.
+guarda-toolchain:
+	@declarada=$$(awk '/^go /{print $$2}' go.mod); \
+	if [ "$$declarada" != "$(GO_MINIMO)" ]; then \
+		echo "go.mod declara 'go $$declarada', esperado '$(GO_MINIMO)'."; \
+		echo "Se a elevação for intencional, atualize GO_MINIMO no Makefile,"; \
+		echo "deploy/Dockerfile e .github/workflows/ci.yml na mesma mudança."; \
+		exit 1; \
+	fi
+	@if grep -q '^toolchain ' go.mod; then \
+		echo "go.mod ganhou uma linha 'toolchain': remova-a para manter a compilação hermética."; \
+		exit 1; \
+	fi
+	@echo "diretriz go: $(GO_MINIMO), sem linha toolchain"
+
+## tidy: normaliza go.mod e go.sum
 tidy:
 	go mod tidy
-	@arquivos=$$(ls go.mod go.sum 2>/dev/null); \
-	git diff --exit-code $$arquivos || { \
-		echo "go.mod ou go.sum mudaram: rode 'make tidy' e commite"; exit 1; }
+
+## tidy-check: falha se 'go mod tidy' alteraria algo (usado na integração contínua)
+##   Compara antes e depois da própria execução, e não contra o git: o alvo
+##   detecta esquecimento de tidy, não trabalho em andamento não commitado.
+tidy-check:
+	@cp go.mod /tmp/go.mod.antes
+	@cp go.sum /tmp/go.sum.antes 2>/dev/null || : > /tmp/go.sum.antes
+	@go mod tidy
+	@if ! diff -q /tmp/go.mod.antes go.mod >/dev/null || \
+	    ! diff -q /tmp/go.sum.antes go.sum >/dev/null; then \
+		echo "go.mod/go.sum estavam desatualizados: 'go mod tidy' os alterou. Commite as mudanças."; \
+		diff -u /tmp/go.mod.antes go.mod || true; \
+		exit 1; \
+	fi
+	@echo "go.mod e go.sum normalizados" 
 
 ## cobertura: relatório de cobertura por pacote
 cobertura: test

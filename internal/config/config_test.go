@@ -1,0 +1,458 @@
+package config_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gluizcortez/projetorust/internal/config"
+)
+
+// variaveis são todas as que Carregar consulta. O ambiente de teste começa sem
+// nenhuma delas, para que um valor herdado do processo não contamine o
+// resultado.
+var variaveis = []string{
+	"SERVIDOR_IP", "SERVIDOR_PORTA", "DATABASE_URL", "API_KEY",
+	"CONFIG_ESTRITA", "MAX_UPLOAD_BYTES", "MAX_IMPORTACOES_CONCORRENTES",
+	"INDEX_MEMORIA_BYTES", "SHUTDOWN_TIMEOUT", "IDEMPOTENCIA_POR_HASH",
+	"GRAVACAO_EM_LOTE", "VALIDAR_ASSINATURA_PDF", "VARREDURA_ORFAS",
+	"RESPOSTA_PROBLEM_JSON", "RATE_LIMIT_RPS", "STATUS_ENDPOINT",
+	"HEALTH_ENDPOINTS", "LOG_NIVEL", "LOG_FORMATO", "OTEL_EXPORTER_OTLP_ENDPOINT",
+}
+
+// ambienteLimpo remove todas as variáveis conhecidas e as restaura ao final.
+func ambienteLimpo(t *testing.T) {
+	t.Helper()
+	anteriores := make(map[string]string, len(variaveis))
+	for _, v := range variaveis {
+		if valor, existia := os.LookupEnv(v); existia {
+			anteriores[v] = valor
+		}
+		_ = os.Unsetenv(v)
+	}
+	t.Cleanup(func() {
+		for _, v := range variaveis {
+			if valor, ok := anteriores[v]; ok {
+				_ = os.Setenv(v, valor)
+			} else {
+				_ = os.Unsetenv(v)
+			}
+		}
+	})
+}
+
+// comSegredosValidos define apenas as duas variáveis obrigatórias.
+func comSegredosValidos(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", "postgres://usuario:senha@banco:5432/recorte")
+	t.Setenv("API_KEY", "chave-de-teste")
+}
+
+func carregar(t *testing.T) (*config.Config, error) {
+	t.Helper()
+	return config.Carregar(context.Background())
+}
+
+// -------------------------------------------------------------------------
+// Padrões
+// -------------------------------------------------------------------------
+
+func TestPadroesReproduzemOLegado(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("carregar: %v", err)
+	}
+
+	casos := []struct {
+		nome     string
+		obtido   any
+		esperado any
+	}{
+		{"ServidorIP", cfg.ServidorIP, "192.168.42.1"},
+		{"ServidorPorta", cfg.ServidorPorta, uint16(6001)},
+		{"Endereco", cfg.Endereco(), "192.168.42.1:6001"},
+		{"ConfigEstrita", cfg.ConfigEstrita, false},
+		{"MaxUploadBytes", cfg.MaxUploadBytes, int64(0)},
+		{"MaxImportacoesConcorrentes", cfg.MaxImportacoesConcorrentes, 0},
+		{"IndexMemoriaBytes", cfg.IndexMemoriaBytes, int64(500_000_000)},
+		{"ShutdownTimeout", cfg.ShutdownTimeout, time.Duration(0)},
+		{"IdempotenciaPorHash", cfg.IdempotenciaPorHash, false},
+		{"GravacaoEmLote", cfg.GravacaoEmLote, false},
+		{"ValidarAssinaturaPDF", cfg.ValidarAssinaturaPDF, false},
+		{"VarreduraOrfas", cfg.VarreduraOrfas, false},
+		{"RespostaProblemJSON", cfg.RespostaProblemJSON, false},
+		{"RateLimitRPS", cfg.RateLimitRPS, 0},
+		{"StatusEndpoint", cfg.StatusEndpoint, false},
+		{"HealthEndpoints", cfg.HealthEndpoints, false},
+		{"LogNivel", cfg.LogNivel, slog.LevelInfo},
+		{"LogFormato", cfg.LogFormato, "json"},
+		{"OTLPEndpoint", cfg.OTLPEndpoint, ""},
+	}
+
+	for _, c := range casos {
+		if c.obtido != c.esperado {
+			t.Errorf("%s = %v, esperado %v", c.nome, c.obtido, c.esperado)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------
+// A19 — porta inválida cai no padrão sem erro
+// -------------------------------------------------------------------------
+
+func TestPortaReproduzDefeitoA19(t *testing.T) {
+	casos := []struct {
+		valor          string
+		esperada       uint16
+		erroSemEstrita bool
+		erroComEstrita bool
+		observacao     string
+	}{
+		{"6001", 6001, false, false, "valor normal"},
+		{"8080", 8080, false, false, "valor normal"},
+		{"abc", 6001, false, true, "não numérico — DEFEITO PRESERVADO (A19)"},
+		{"", 6001, false, true, "vazio"},
+		{"70000", 6001, false, true, "acima de u16::MAX"},
+		{"-1", 6001, false, true, "negativo"},
+		{"6001.5", 6001, false, true, "decimal"},
+		{"0", 0, false, false, "porta efêmera — valor válido, ver ESPECIFICACAO §1.1"},
+		{"65535", 65535, false, false, "limite superior válido"},
+	}
+
+	for _, c := range casos {
+		t.Run("sem_estrita/"+c.valor, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv("SERVIDOR_PORTA", c.valor)
+
+			cfg, err := carregar(t)
+			if c.erroSemEstrita {
+				if err == nil {
+					t.Fatalf("esperava erro para SERVIDOR_PORTA=%q (%s)", c.valor, c.observacao)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SERVIDOR_PORTA=%q (%s) não deveria falhar: %v", c.valor, c.observacao, err)
+			}
+			if cfg.ServidorPorta != c.esperada {
+				t.Errorf("SERVIDOR_PORTA=%q -> %d, esperado %d (%s)",
+					c.valor, cfg.ServidorPorta, c.esperada, c.observacao)
+			}
+		})
+
+		t.Run("com_estrita/"+c.valor, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv("CONFIG_ESTRITA", "true")
+			t.Setenv("SERVIDOR_PORTA", c.valor)
+
+			_, err := carregar(t)
+			if c.erroComEstrita && err == nil {
+				t.Errorf("com CONFIG_ESTRITA=true, SERVIDOR_PORTA=%q deveria falhar (%s)",
+					c.valor, c.observacao)
+			}
+			if !c.erroComEstrita && err != nil {
+				t.Errorf("com CONFIG_ESTRITA=true, SERVIDOR_PORTA=%q não deveria falhar: %v",
+					c.valor, err)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------
+// Obrigatórias: uma única falha listando todos os problemas
+// -------------------------------------------------------------------------
+
+func TestObrigatoriasAusentesFalhamJuntas(t *testing.T) {
+	ambienteLimpo(t)
+
+	_, err := carregar(t)
+	if err == nil {
+		t.Fatal("esperava erro com DATABASE_URL e API_KEY ausentes")
+	}
+
+	erroCfg, ok := config.ComoErroDeConfiguracao(err)
+	if !ok {
+		t.Fatalf("esperava *ErroDeConfiguracao, obtive %T", err)
+	}
+	if len(erroCfg.Problemas) != 2 {
+		t.Errorf("esperava 2 problemas, obtive %d: %v", len(erroCfg.Problemas), erroCfg.Problemas)
+	}
+
+	msg := err.Error()
+	for _, nome := range []string{"DATABASE_URL", "API_KEY"} {
+		if !strings.Contains(msg, nome) {
+			t.Errorf("a mensagem única deveria mencionar %s; obtive:\n%s", nome, msg)
+		}
+	}
+}
+
+func TestErrosDeVariasVariaveisSaoAcumulados(t *testing.T) {
+	ambienteLimpo(t)
+	t.Setenv("MAX_UPLOAD_BYTES", "muitos")
+	t.Setenv("SHUTDOWN_TIMEOUT", "pra sempre")
+	t.Setenv("LOG_NIVEL", "gritante")
+	t.Setenv("LOG_FORMATO", "xml")
+	t.Setenv("GRAVACAO_EM_LOTE", "talvez")
+
+	_, err := carregar(t)
+	if err == nil {
+		t.Fatal("esperava erro")
+	}
+	erroCfg, ok := config.ComoErroDeConfiguracao(err)
+	if !ok {
+		t.Fatalf("esperava *ErroDeConfiguracao, obtive %T", err)
+	}
+	// 5 malformadas + 2 obrigatórias ausentes.
+	if len(erroCfg.Problemas) != 7 {
+		t.Errorf("esperava 7 problemas acumulados, obtive %d:\n%v",
+			len(erroCfg.Problemas), erroCfg.Problemas)
+	}
+}
+
+// -------------------------------------------------------------------------
+// Redação de segredos
+// -------------------------------------------------------------------------
+
+func TestSegredosNuncaVazamEmNenhumaSaida(t *testing.T) {
+	const (
+		senhaReal = "S3nh4-Sup3r-S3cr3t4-do-Banco"
+		chaveReal = "01956cb2-2f85-7440-9767-1a6651c10e0f"
+	)
+
+	ambienteLimpo(t)
+	t.Setenv("DATABASE_URL", "postgres://appuser:"+senhaReal+"@db.interno:5432/recorte?sslmode=require")
+	t.Setenv("API_KEY", chaveReal)
+
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("carregar: %v", err)
+	}
+
+	jsonBytes, err := json.Marshal(map[string]any{
+		"database_url": cfg.DatabaseURL,
+		"api_key":      cfg.APIKey,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var registro strings.Builder
+	slog.New(slog.NewJSONHandler(&registro, nil)).Info("configuração", "cfg", cfg)
+
+	// O verbo passa por variável de propósito: a redundância de fmt.Sprintf("%s", x)
+	// é exatamente o caminho que este teste precisa exercitar, e o staticcheck
+	// a sinalizaria se o formato fosse constante.
+	comVerbo := func(verbo string, v any) string { return fmt.Sprintf(verbo, v) }
+
+	saidas := map[string]string{
+		"Config.String()":   cfg.String(),
+		"Config.LogValue()": fmt.Sprintf("%v", cfg.LogValue()),
+		"registro slog":     registro.String(),
+		"json.Marshal":      string(jsonBytes),
+		"%v da URL":         comVerbo("%v", cfg.DatabaseURL),
+		"%s da URL":         comVerbo("%s", cfg.DatabaseURL),
+		"%#v da URL":        comVerbo("%#v", cfg.DatabaseURL),
+		"%v da chave":       comVerbo("%v", cfg.APIKey),
+		"%s da chave":       comVerbo("%s", cfg.APIKey),
+		"%#v da chave":      comVerbo("%#v", cfg.APIKey),
+		"URL.String()":      cfg.DatabaseURL.String(),
+		"chave.String()":    cfg.APIKey.String(),
+	}
+
+	// Além do valor inteiro, checamos prefixos: revelar os primeiros
+	// caracteres de uma credencial é revelar parte dela.
+	proibidos := []string{
+		senhaReal, senhaReal[:12], senhaReal[:8],
+		chaveReal, chaveReal[:16], chaveReal[:8],
+	}
+
+	for origem, texto := range saidas {
+		for _, p := range proibidos {
+			if strings.Contains(texto, p) {
+				t.Errorf("VAZAMENTO em %s: contém %q\n  saída: %s", origem, p, texto)
+			}
+		}
+	}
+
+	// A URL redigida deve preservar o que é útil em diagnóstico.
+	redigida := cfg.DatabaseURL.String()
+	for _, util := range []string{"db.interno", "5432", "recorte", "appuser"} {
+		if !strings.Contains(redigida, util) {
+			t.Errorf("a URL redigida deveria preservar %q para diagnóstico; obtive %s", util, redigida)
+		}
+	}
+
+	// E Revelar deve continuar devolvendo o valor real.
+	if !strings.Contains(cfg.DatabaseURL.Revelar(), senhaReal) {
+		t.Error("Revelar() deveria devolver a URL completa")
+	}
+	if cfg.APIKey.Revelar() != chaveReal {
+		t.Error("Revelar() deveria devolver a chave completa")
+	}
+}
+
+func TestErroDeValidacaoNaoEcoaSegredo(t *testing.T) {
+	// Uma DATABASE_URL presente mas em branco: o erro é de ausência e não pode
+	// carregar nada do valor.
+	ambienteLimpo(t)
+	t.Setenv("DATABASE_URL", "   ")
+	t.Setenv("API_KEY", "   ")
+
+	_, err := carregar(t)
+	if err == nil {
+		t.Fatal("esperava erro para valores em branco")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "   ") && strings.Count(msg, " ") > 40 {
+		t.Errorf("a mensagem parece ecoar o valor bruto: %q", msg)
+	}
+	for _, nome := range []string{"DATABASE_URL", "API_KEY"} {
+		if !strings.Contains(msg, nome) {
+			t.Errorf("a mensagem deveria mencionar %s: %s", nome, msg)
+		}
+	}
+}
+
+func TestURLMalformadaFicaTotalmenteOpaca(t *testing.T) {
+	casos := []struct {
+		nome string
+		url  string
+	}{
+		{"sem esquema", "usuario:senha@host/base"},
+		{"lixo", "::::"},
+		{"só texto", "isto-nao-e-uma-url-com-senha-embutida"},
+	}
+	for _, c := range casos {
+		t.Run(c.nome, func(t *testing.T) {
+			u := config.URLSegredo(c.url)
+			if got := u.String(); got != config.MarcadorRedigido {
+				t.Errorf("URL malformada deveria ficar opaca; obtive %q", got)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------
+// Chaves de recurso e demais analisadores
+// -------------------------------------------------------------------------
+
+func TestChavesDeRecursoLigam(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+	for _, v := range []string{
+		"IDEMPOTENCIA_POR_HASH", "GRAVACAO_EM_LOTE", "VALIDAR_ASSINATURA_PDF",
+		"VARREDURA_ORFAS", "RESPOSTA_PROBLEM_JSON", "STATUS_ENDPOINT",
+		"HEALTH_ENDPOINTS", "CONFIG_ESTRITA",
+	} {
+		t.Setenv(v, "true")
+	}
+	t.Setenv("MAX_UPLOAD_BYTES", "104857600")
+	t.Setenv("MAX_IMPORTACOES_CONCORRENTES", "4")
+	t.Setenv("RATE_LIMIT_RPS", "50")
+	t.Setenv("SHUTDOWN_TIMEOUT", "45s")
+
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("carregar: %v", err)
+	}
+	if !cfg.IdempotenciaPorHash || !cfg.GravacaoEmLote || !cfg.ValidarAssinaturaPDF ||
+		!cfg.VarreduraOrfas || !cfg.RespostaProblemJSON || !cfg.StatusEndpoint ||
+		!cfg.HealthEndpoints || !cfg.ConfigEstrita {
+		t.Error("todas as chaves booleanas deveriam estar ligadas")
+	}
+	if cfg.MaxUploadBytes != 104857600 {
+		t.Errorf("MaxUploadBytes = %d", cfg.MaxUploadBytes)
+	}
+	if cfg.MaxImportacoesConcorrentes != 4 {
+		t.Errorf("MaxImportacoesConcorrentes = %d", cfg.MaxImportacoesConcorrentes)
+	}
+	if cfg.RateLimitRPS != 50 {
+		t.Errorf("RateLimitRPS = %d", cfg.RateLimitRPS)
+	}
+	if cfg.ShutdownTimeout != 45*time.Second {
+		t.Errorf("ShutdownTimeout = %s", cfg.ShutdownTimeout)
+	}
+}
+
+func TestDuracaoAceitaSegundosSimples(t *testing.T) {
+	casos := map[string]time.Duration{
+		"30":    30 * time.Second,
+		"30s":   30 * time.Second,
+		"2m":    2 * time.Minute,
+		"1h30m": 90 * time.Minute,
+		"0":     0,
+	}
+	for entrada, esperado := range casos {
+		t.Run(entrada, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv("SHUTDOWN_TIMEOUT", entrada)
+			cfg, err := carregar(t)
+			if err != nil {
+				t.Fatalf("SHUTDOWN_TIMEOUT=%q: %v", entrada, err)
+			}
+			if cfg.ShutdownTimeout != esperado {
+				t.Errorf("SHUTDOWN_TIMEOUT=%q -> %s, esperado %s", entrada, cfg.ShutdownTimeout, esperado)
+			}
+		})
+	}
+}
+
+func TestNivelDeLog(t *testing.T) {
+	casos := map[string]slog.Level{
+		"debug":   slog.LevelDebug,
+		"DEBUG":   slog.LevelDebug,
+		"info":    slog.LevelInfo,
+		"warn":    slog.LevelWarn,
+		"warning": slog.LevelWarn,
+		"error":   slog.LevelError,
+		"erro":    slog.LevelError,
+	}
+	for entrada, esperado := range casos {
+		t.Run(entrada, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv("LOG_NIVEL", entrada)
+			cfg, err := carregar(t)
+			if err != nil {
+				t.Fatalf("LOG_NIVEL=%q: %v", entrada, err)
+			}
+			if cfg.LogNivel != esperado {
+				t.Errorf("LOG_NIVEL=%q -> %v, esperado %v", entrada, cfg.LogNivel, esperado)
+			}
+		})
+	}
+}
+
+func TestValoresNegativosSaoRejeitados(t *testing.T) {
+	for _, v := range []string{"MAX_UPLOAD_BYTES", "MAX_IMPORTACOES_CONCORRENTES", "RATE_LIMIT_RPS"} {
+		t.Run(v, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv(v, "-1")
+			if _, err := carregar(t); err == nil {
+				t.Errorf("%s=-1 deveria falhar", v)
+			}
+		})
+	}
+}
+
+func TestContextoCanceladoInterrompe(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+	ctx, cancelar := context.WithCancel(context.Background())
+	cancelar()
+	if _, err := config.Carregar(ctx); err == nil {
+		t.Error("contexto cancelado deveria interromper a carga")
+	}
+}

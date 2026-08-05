@@ -178,7 +178,7 @@ separado, a ser usado em um cenário próprio na fase F7.
 
 | Artefato | Caminho | Estado |
 |---|---|---|
-| Módulo Go | `go.mod` (`go 1.23.0`) | sem dependências de terceiros |
+| Módulo Go | `go.mod` (`go 1.24.7`, ajustado para `1.24.0` na F2) | sem dependências de terceiros |
 | Árvore de pacotes | `internal/`, `cmd/`, `test/`, `db/`, `api/`, `deploy/` | 15 `doc.go`, cada um dizendo o que o pacote **não** faz |
 | Ponto de entrada | `cmd/recorte-api/main.go` | sobe, responde 404, aceita `-versao` e `-healthcheck` |
 | Verificação de arquitetura | `internal/arch_test.go` | falha nomeando o pacote infrator |
@@ -280,3 +280,182 @@ que vai validá-los.** Até lá, tratar o empacotamento como não verificado.
 ### Dependências novas
 
 Nenhuma. O módulo não tem dependências de terceiros ao fim da F1.
+
+---
+
+## F2 — Configuração tipada e observabilidade
+
+**Status:** concluída · **Data:** 2026-08-05
+
+### Entregáveis
+
+| Artefato | Caminho | Cobertura |
+|---|---|---|
+| Configuração tipada | `internal/config/config.go` | 90,1% |
+| Tipos de segredo | `internal/config/segredo.go` | — |
+| Registrador estruturado | `internal/platform/observability/logger.go` | 92,2% |
+| Propagação por contexto | `internal/platform/observability/contexto.go` | — |
+| Métricas | `internal/platform/observability/metricas.go` | — |
+| Rastreamento OTLP | `internal/platform/observability/tracing.go` | — |
+| Ponto de entrada ligado | `cmd/recorte-api/main.go` | — |
+
+### Divergência encontrada no passo 1 do procedimento
+
+O prompt da F2 enumera **16** variáveis; o apêndice §8.1 do roadmap lista **20**
+— faltam `VARREDURA_ORFAS`, `RATE_LIMIT_RPS`, `STATUS_ENDPOINT` e
+`HEALTH_ENDPOINTS` na lista do prompt.
+
+A divergência é **aditiva**: o apêndice é superconjunto. Implementadas as 20,
+o que satisfaz as duas fontes e evita que a F11 reabra o encanamento de
+configuração. Registrado em vez de bloquear, porque parar aqui não entregaria
+nada e nenhuma interpretação leva a trabalho diferente.
+
+### Decisões tomadas
+
+1. **Segredos são tipos, não `string`.** `config.Segredo` e `config.URLSegredo`
+   implementam `String`, `GoString`, `LogValue` e `MarshalText` devolvendo o
+   marcador. A proteção passa a ser **estrutural**: `%v`, `%s`, `%#v`,
+   `slog.Any` e `json.Marshal` não têm como vazar. O valor real só sai por
+   `Revelar()`, que é auditável por busca textual.
+
+2. **`MarcadorRedigido` é ASCII (`REDIGIDO`).** A primeira versão usava aspas
+   angulares e saía como `%C2%ABredigido%C2%BB` dentro da URL, porque
+   `url.String()` codifica não-ASCII. Sem vazamento, mas ilegível no
+   diagnóstico.
+
+3. **A URL redigida preserva esquema, usuário, host, porta e base.** São o que
+   serve ao diagnóstico; só a senha e os parâmetros sensíveis viram marcador.
+   URL malformada fica **totalmente opaca** — é preferível perder diagnóstico a
+   ecoar uma cadeia que pode ter a senha em posição inesperada.
+
+4. **`CONFIG_ESTRITA` só governa `SERVIDOR_PORTA`.** As demais variáveis são
+   novas: não há comportamento de legado a preservar, então valor malformado é
+   sempre erro, independentemente da chave.
+
+5. **`SHUTDOWN_TIMEOUT` aceita inteiro simples como segundos**, além da notação
+   do Go. É como operadores escrevem.
+
+6. **Métricas com Prometheus, rastros com OpenTelemetry.** Combinação usual e
+   previsível. O registro é **próprio**, nunca o global — teste comprova que
+   duas instâncias coexistem.
+
+7. **Métrica `recorte_documentos_sem_paginas_total` acrescentada**, cumprindo o
+   encaminhamento de D-18: é a única forma de enxergar o caso do PDF truncado
+   (INV-P20) sem alterar comportamento.
+
+8. **`NovoLogger` recebe um `io.Writer`**, divergindo da assinatura do prompt
+   (`NovoLogger(cfg)`). Sem isso não há como asserir a saída em teste, e o
+   critério de aceite da fase exige exatamente essa asserção.
+
+### Bug encontrado por cobertura
+
+Ao cobrir o caminho do OTLP, `resource.Merge` falhou com *conflicting Schema
+URL*: `resource.Default()` do SDK usa o esquema 1.43.0 e o `semconv` importado
+era 1.26.0. **Só apareceria quando alguém ligasse `OTEL_EXPORTER_OTLP_ENDPOINT`
+em produção.** Corrigido com `resource.NewSchemaless`, que elimina o
+acoplamento de versão. A cobertura do pacote subiu de 66,7% para 92,2%.
+
+### Incidente de toolchain — e a guarda que ficou
+
+`go get` das dependências elevou a diretriz do `go.mod` de `1.24.7` para
+`1.25.0`, porque as versões correntes de `prometheus/client_golang`, `otel` e
+`grpc` exigem 1.25. Isso trocou o toolchain em tempo de compilação, e **as
+toolchains que o Go baixa automaticamente neste ambiente vêm truncadas**:
+
+```
+$ ls .../toolchain@v0.0.1-go1.25.0.../pkg/tool/linux_amd64/
+asm cgo compile cover link preprofile vet        ← sem covdata, pack, nm...
+```
+
+Resultado: `go test -coverprofile` passou a falhar com
+`go: no such tool "covdata"`. As duas toolchains baixadas (1.25.0 e 1.25.12)
+estão igualmente truncadas; só a 1.24.7 pré-instalada é completa.
+
+**Resolução:** o módulo ficou em `go 1.24.0`, com as dependências fixadas nas
+últimas versões compatíveis:
+
+| Módulo | Versão | Última exige |
+|---|---|---|
+| `prometheus/client_golang` | v1.21.1 | v1.24.1 → go 1.25 |
+| `go.opentelemetry.io/otel*` | v1.35.0 | v1.45.0 → go 1.25 |
+| `grpc-gateway/v2` | v2.26.1 | v2.29.0 → go 1.25 |
+
+**Guarda criada:** o alvo `make guarda-toolchain` falha se a diretriz `go` do
+`go.mod` mudar ou se surgir uma linha `toolchain`, e integra o `make ci`. A
+mensagem instrui a atualizar `Makefile`, `deploy/Dockerfile` e o fluxo de
+integração contínua **na mesma mudança** — porque foi a divergência entre eles
+que criou o problema.
+
+Isso é dívida assumida: as dependências ficam uma geração atrás até que a
+elevação para 1.25 seja feita deliberadamente, com os três arquivos alinhados.
+
+### Correção de registro da F1
+
+O registro da F1 dizia `go.mod (go 1.23.0)`. O valor efetivamente commitado era
+`go 1.24.7` — a intenção declarada nunca foi aplicada ao arquivo. Corrigido
+acima.
+
+### Mapeamento das mensagens de log do legado
+
+Identificadores saem do texto e viram atributos; a mensagem fica estável e
+pesquisável. Emitidos a partir das fases indicadas.
+
+| `reference/main.rs` | Mensagem do legado | Evento em Go | Atributos | Fase |
+|---|---|---|---|---|
+| 66 | `Servidor iniciando em: {servidor}` | `servidor iniciando` | `endereco`, `versao`, `revisao`, `config` | **F2** |
+| 104 | `>>>>> <CTRL>-C recebido` | `encerrando` | `motivo=sinal` | F10 |
+| 105 | `>>>>> Kill recebido` | `encerrando` | `motivo=sinal` | F10 |
+| 72 | `Aguardando tarefas encerrarem.` | `drenando importações` | `em_andamento` | F10 |
+| 136 | `[ID Requisição: {id} recebida` | `requisição recebida` | `id_requisicao` | F9 |
+| 216 | `Parâmetros recebidos: {:?}` | `parâmetros recebidos` | `id_requisicao`, campos | F9 |
+| 219 | `Críticas: {:?}` | `validação rejeitou a requisição` | `id_requisicao`, `criticas` | F9 |
+| 240 | `Erro ao registrar o PDF: {e:?}` | `falha ao registrar importação` | `id_requisicao`, `erro` | F9 |
+| 258 | `Processo de recorte INICIADO` | `processo de recorte iniciado` | `id_importacao` | F8 |
+| 264 | `Processo de recorte FINALIZADO` | `processo de recorte finalizado` | `id_importacao`, `duracao` | F8 |
+| 480 | `Paginando PDF` | `paginando documento` | `id_importacao` | F5 |
+| 508 | `Há {} página(s) a indexar` | `documento paginado` | `id_importacao`, `paginas` | F5 |
+| 533 | `PDF indexado` | `documento indexado` | `id_importacao`, `paginas` | F7 |
+| 276 | `Há {} perfis/expressões a pesquisar` | `chaves de pesquisa carregadas` | `id_importacao`, `chaves` | F8 |
+| 292 | `Há {} recorte(s) a filtrar para [Perfil …]` | `recortes encontrados` | `id_importacao`, `id_perfil`, `expressao`, `total` | F8 |
+| 309 | `Há {} recorte(s) a registrar …` | `recortes a gravar` | idem + `total` | F8 |
+| 311 | `Registrado(s) {} recorte(s) …` | `recortes gravados` | idem + `total` | F8 |
+| 313 | `Erro ao registrar recorte …` | `falha ao gravar recortes` | idem + `erro` | F8 |
+| 319 | `Erro a recortar [Perfil … ]` | `falha ao recortar` | idem + `erro` | F8 |
+| 328 | `Erro ao obter perfis/expressões` | `falha ao carregar chaves de pesquisa` | `id_importacao`, `erro` | F8 |
+| 333 | `Erro ao criar índice de buscas` | `falha ao indexar documento` | `id_importacao`, `erro` | F7 |
+| 610 | `Erro ao salvar recorte: {e:?}` | `falha ao gravar recorte` | `id_importacao`, `erro` | F4 |
+| 622 | `Erro ao salvar texto do recorte: {e:?}` | `falha ao gravar texto do recorte` | `id_importacao`, `erro` | F4 |
+
+Duas observações. As linhas 104 e 105 usam `println!`, não o subsistema de
+registro — a mensagem do legado não é estruturada nem sai pelo `tracing`; em Go
+passam a ser eventos normais. E as linhas 313, 319 e 333 têm colchete não
+fechado ou seta com espaço no legado (achado A21); as mensagens em Go são
+regulares, o que é mudança de **texto de log**, não de contrato.
+
+### Verificação executada
+
+```
+make ci                                        guarda ok, tidy ok, lint 0, testes ok, build ok
+go test ./internal/config/... -race -cover     90,1%
+go test ./internal/platform/... -race -cover   92,2%
+bin/recorte-api sem segredos                   falha listando DATABASE_URL E API_KEY juntas, saída 1
+bin/recorte-api com segredos                   sobe, registra JSON com config redigida, 404 em /ping
+SIGTERM                                        encerra gracioso, saída 0
+```
+
+### Pendências que entram na F3
+
+1. As de F0 seguem abertas: **D-15** e **D-11** (bloqueantes), **D-14**,
+   **D-08** e **D-10**.
+2. Elevar deliberadamente para go 1.25 quando o ambiente de construção tiver
+   toolchain completa, atualizando os três arquivos juntos.
+3. O `Dockerfile` continua **não verificado** — sem daemon Docker no ambiente.
+
+### Dependências novas
+
+| Dependência | Justificativa |
+|---|---|
+| `github.com/joho/godotenv` | Equivalente do `dotenvy` do legado; mesma precedência (ambiente vence o arquivo) e mesma tolerância à ausência. |
+| `github.com/prometheus/client_golang` | Métricas. Padrão de mercado; expõe registro próprio, o que evita estado global. |
+| `go.opentelemetry.io/otel` + `sdk` + `trace` + exportador OTLP | Rastreamento distribuído, desligado por padrão. |
+| `github.com/prometheus/client_model` | Apenas em teste, para asserir tipo e rótulo das métricas coletadas. |
