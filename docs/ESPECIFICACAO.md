@@ -96,8 +96,12 @@ Autenticado. Corpo `multipart/form-data`.
 Os nomes usam **hífen**, não sublinhado. Campos repetidos: prevalece o primeiro
 (comportamento de `req.form`). **`INFERIDO — confirmar`**
 
-`%Y-%m-%d` é estrito: exige quatro dígitos de ano e dois de mês e dia.
-`2024-3-15` **não** é aceito; `2024-03-15` é. **`INFERIDO — confirmar`**
+`%Y-%m-%d` é **permissivo**, ao contrário do que esta especificação afirmava
+até a fase F3. Medido contra chrono 0.4: `2024-3-15`, `2024-03-5`, `24-03-15`,
+`  2024-03-15`, `+2024-03-15` e `-2024-03-15` são **todos aceitos**. A gramática
+completa e a tabela de medição estão em `INVARIANTES.md`, **INV-P21** — que é
+uma armadilha de paridade, porque `time.Parse("2006-01-02", …)` do Go rejeita
+os seis casos e mudaria o corpo da resposta 400.
 
 #### 1.4.2 Textos de crítica — literais normativos
 
@@ -113,7 +117,7 @@ Ordem de acumulação fixa (`main.rs:151–214`). É contrato observável.
 | 3 | `id-usuario` ausente | `Id do usuário não informado` | 185 |
 | 4 | `id-caderno` presente e não analisável | `Id do caderno é inválido` | 194 |
 | 4 | `id-caderno` ausente | `Id do caderno não informado` | 198 |
-| 5 | arquivo presente e sem nome | `PDF não possui nome` | 206 |
+| 5 | arquivo presente e sem nome | `PDF não possui nome` | 207 |
 | 5 | arquivo ausente | `PDF não enviado` | 211 |
 
 Por posição, no máximo uma crítica é acrescentada. O separador é

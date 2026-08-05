@@ -459,3 +459,126 @@ SIGTERM                                        encerra gracioso, saída 0
 | `github.com/prometheus/client_golang` | Métricas. Padrão de mercado; expõe registro próprio, o que evita estado global. |
 | `go.opentelemetry.io/otel` + `sdk` + `trace` + exportador OTLP | Rastreamento distribuído, desligado por padrão. |
 | `github.com/prometheus/client_model` | Apenas em teste, para asserir tipo e rótulo das métricas coletadas. |
+
+---
+
+## F3 — Núcleo de domínio e portas
+
+**Status:** concluída · **Data:** 2026-08-05
+
+### Entregáveis
+
+| Artefato | Caminho | Cobertura |
+|---|---|---|
+| Data pura, sem fuso | `internal/domain/data.go` | |
+| Conversões estreitantes | `internal/domain/numeros.go` | |
+| Máquina de estados | `internal/domain/status.go` | |
+| Acumulador de críticas | `internal/domain/critica.go` | 96,6% |
+| Validação da submissão | `internal/domain/validacao.go` | (pacote) |
+| Entidades | `internal/domain/{importacao,recorte,perfil}.go` | |
+| Erros sentinela | `internal/domain/errors.go` | |
+| Portas | `internal/domain/ports.go` | |
+| Dublês de teste | `internal/domain/domaintest/` | 66,7% |
+
+`go list -deps ./internal/domain` não lista **nenhuma** dependência de
+terceiros: apenas `context`, `errors`, `fmt`, `strconv`, `strings`, `time`,
+`unicode` e `unicode/utf8`.
+
+### Passo 1 do procedimento — conferência bloqueante
+
+Os dez textos de crítica foram conferidos **linha a linha** contra
+`reference/main.rs`. Todos conferem **byte a byte**. Uma divergência apareceu,
+e era de citação: `PDF não possui nome` está na linha **207**, não 206 como a
+`ESPECIFICACAO.md` afirmava. Corrigido.
+
+### INV-P21 — a medição que refutou a especificação
+
+A `ESPECIFICACAO.md` afirmava, marcado como `INFERIDO — confirmar`:
+
+> `%Y-%m-%d` é estrito: exige quatro dígitos de ano e dois de mês e dia.
+> `2024-3-15` **não** é aceito.
+
+**Falso.** Medido contra chrono 0.4 com uma sonda descartável, o analisador é
+bem mais permissivo. Seis formas que o legado aceita são rejeitadas por
+`time.Parse("2006-01-02", …)`:
+
+| Entrada | chrono | valor | `time.Parse` |
+|---|---|---|---|
+| `2024-3-15` | aceita | 2024-03-15 | rejeita |
+| `2024-03-5` | aceita | 2024-03-05 | rejeita |
+| `24-03-15` | aceita | **0024**-03-15 | rejeita |
+| `  2024-03-15` | aceita | 2024-03-15 | rejeita |
+| `+2024-03-15` | aceita | 2024-03-15 | rejeita |
+| `-2024-03-15` | aceita | −2024-03-15 | rejeita |
+
+Note `24-03-15`: não é só aceitar ou recusar — o **valor persistido** também
+diverge, porque o ano é 24 e não 2024.
+
+Um porte com `time.Parse` responderia 400 com
+`Data do caderno é inválida` onde o legado responde 200. Catalogado como
+**INV-P21** com a gramática completa; `domain.AnalisarData` a implementa, e
+`TestAnalisarDataDivergeDeTimeParse` falha se alguém "simplificar" a função.
+
+A mesma sonda mediu `str::parse::<i64>()` e `::<i32>()`: Rust e Go **concordam**
+— ambos aceitam sinal explícito e rejeitam espaço, separador de milhar e parte
+decimal. Equivalência agora medida, não presumida.
+
+### Decisões tomadas
+
+1. **A validação mora no domínio**, em `SubmissaoPDF.Validar()`. É regra de
+   negócio, não de transporte, e é o que torna o critério de aceite exaustivo
+   verificável sem HTTP. A F8 e a F9 apenas a acionam.
+
+2. **`Data` é tipo próprio**, não `time.Time`. Evita, por construção, o
+   deslocamento de um dia de INV-P16 — `time.Time` carrega fuso e convida ao
+   erro.
+
+3. **`Recorte` mantém `Texto` e `Destaque`**, apesar de `Texto` ser dado morto
+   no legado. Em Go os dois compartilham o mesmo *backing array*, então o custo
+   é um cabeçalho de string, não uma cópia do texto da página. Manter deixa a
+   evolução da F11 (janela de contexto) como mudança de uma linha.
+
+4. **`PodeTransicionarPara` não recusa gravação.** É rede de segurança de
+   desenvolvimento: o legado não valida transições, e recusar seria
+   comportamento novo. Serve para registrar anomalia, não para barrar.
+
+5. **`StatusReservado` (4) declarado e sem uso**, com comentário explicando que
+   o número fica reservado — se alguém precisar de um estado novo, deve escolher
+   outro, porque linhas antigas do banco podem conter 4.
+
+6. **Conversões estreitantes centralizadas** em `numeros.go`. Surgiram porque o
+   `gosec` sinalizou `int32(v)` com G115 — exatamente a classe de bug de
+   INV-P15. Em vez de suprimir o aviso, criei `ParaInt32`, `ParaInt64` e
+   `TamanhoParaInt32`, que a F4 vai usar em `MarcarTermino` e `nr_pagina`.
+
+### Corrida encontrada nos dublês
+
+O detector de corrida acusou acesso concorrente ao estado dos falsos: o
+`Diario` tinha trava, mas `Registradas`, `Status` e `Gravacoes` não. Como a F8
+exercita o executor com importações simultâneas, os dublês precisam ser seguros.
+Corrigido com trava por dublê e acessadores `StatusGravados()` e
+`GravacoesObservadas()` que devolvem cópia.
+
+### Verificação executada
+
+```
+make ci                                             guarda ok, tidy ok, lint 0, testes ok, build ok
+go list -deps ./internal/domain                     nenhum terceiro
+go test ./internal -run TestRegraDeDependencia      PASS
+go test ./internal/domain/... -race -cover          96,6%
+  TestValidacaoExaustiva                            243 subtestes (3^5 combinações)
+  TestAnalisarDataReproduzChrono                    45 casos medidos
+  TestTransicoes                                    49 pares (7×7), válidos e inválidos
+```
+
+### Pendências que entram na F4
+
+1. As de F0 seguem abertas: **D-15** e **D-11** (bloqueantes), **D-14**,
+   **D-08** e **D-10**.
+2. O `Dockerfile` continua **não verificado** — sem daemon Docker no ambiente.
+3. A F4 deve usar `domain.ParaInt32` em `MarcarTermino` (INV-P18) e
+   `domain.ParaInt64` em `nr_pagina` (INV-P15).
+
+### Dependências novas
+
+Nenhuma. O núcleo importa apenas a biblioteca padrão.

@@ -27,7 +27,7 @@ atrás de chave de configuração desligada por padrão.
 | F0 | Especificação executável e corpus dourado | **concluída** com ressalvas (D-11, D-15) |
 | F1 | Fundação do repositório e cadeia de ferramentas | **concluída** — empacotamento não verificado (sem Docker no ambiente) |
 | F2 | Configuração tipada e observabilidade | **concluída** |
-| F3 | Núcleo de domínio e portas | pendente |
+| F3 | Núcleo de domínio e portas | **concluída** |
 | F4 | Persistência | pendente |
 | F5 | Extração de texto do PDF | pendente |
 | F6 | Normalização e tokenização | pendente |

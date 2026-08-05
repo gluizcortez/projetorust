@@ -32,6 +32,7 @@
 | INV-P18 | Estouro de `total_recortes` não grava `data_fim` | F4 | Média |
 | INV-P19 | Expressão acentuada nunca casa | F7 | Alta |
 | INV-P20 | PDF truncado conclui com sucesso e zero recortes | F5 | Alta |
+| INV-P21 | Análise de data do chrono é mais permissiva que a do Go | F3 | Crítica |
 
 ---
 
@@ -764,3 +765,68 @@ cabeçalho falha, um cortado após a tabela de referências pode abrir
 parcialmente. O corpus fixa um caso reprodutível (corte em 1/3); o
 comportamento para outros pontos de corte não é especificado e não deve ser
 assumido.
+
+---
+
+## INV-P21 — A análise de data do chrono é mais permissiva que a do Go
+
+**Descrição.** As duas datas do formulário são analisadas com
+`chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")`
+(`main.rs:152` e `165`). O analisador do chrono é **substancialmente mais
+permissivo** que `time.Parse("2006-01-02", s)` do Go.
+
+A consequência é de contrato: uma entrada que o legado aceita e o Go rejeita
+passa a receber a crítica `Data do caderno é inválida`, o que **muda o corpo da
+resposta 400**.
+
+**Origem da medição.** Executada na fase F3 contra chrono 0.4 e Go 1.24.7. A
+gramática abaixo foi medida, não deduzida — a especificação afirmava o oposto
+(`INFERIDO — confirmar`) e foi **refutada**.
+
+```
+data  := ws* ano '-' ws* mes '-' ws* dia FIM
+ano   := sinal? digitos      // com sinal: até 6 dígitos; sem sinal: até 4
+mes   := digitos             // 1..2 dígitos
+dia   := digitos             // 1..2 dígitos
+```
+
+**Caso positivo — aceitos pelo legado, rejeitados por `time.Parse`:**
+
+| Entrada | chrono | valor | `time.Parse` |
+|---|---|---|---|
+| `2024-3-15` | aceita | 2024-03-15 | **rejeita** |
+| `2024-03-5` | aceita | 2024-03-05 | **rejeita** |
+| `24-03-15` | aceita | **0024**-03-15 | **rejeita** |
+| `  2024-03-15` | aceita | 2024-03-15 | **rejeita** |
+| `+2024-03-15` | aceita | 2024-03-15 | **rejeita** |
+| `-2024-03-15` | aceita | −2024-03-15 | **rejeita** |
+| `+12345-03-15` | aceita | 12345-03-15 | **rejeita** |
+
+Note `24-03-15`: o valor gravado é o ano **24**, não 2024. Não é só uma questão
+de aceitar ou recusar — o valor persistido também diverge.
+
+**Caso negativo — rejeitados pelos dois:**
+
+| Entrada | Motivo |
+|---|---|
+| `2024-03-15 ` | espaço à **direita** não é tolerado |
+| `2024-03-15\n` | idem |
+| `2024 -03-15` | espaço antes do `-` literal |
+| `2024-03-15T00:00:00` | sobra |
+| `20240315` | sem separador |
+| `2024/03/15` | separador errado |
+| `12345-03-15` | cinco dígitos **sem** sinal |
+| `2024-13-01`, `2024-00-15`, `2024-03-00` | fora do intervalo |
+| `2023-02-29`, `1900-02-29` | não bissexto |
+
+**Assimetria do espaço em branco.** É ignorado **antes de cada campo
+numérico** e não antes do `-` literal. Daí `2024- 03-15` passar e
+`2024 -03-15` não.
+
+**Como um porte ingênuo quebraria.** `time.Parse("2006-01-02", s)` é a tradução
+óbvia e está errada em seis das dez formas testadas. O efeito é uma resposta
+400 onde hoje há 200, para submissões que algum cliente já envia.
+
+**Implementação.** `domain.AnalisarData` reproduz a gramática medida. O teste
+`TestAnalisarDataDivergeDeTimeParse` falha se alguém "simplificar" a função
+para `time.Parse`, e explica o motivo na mensagem.
