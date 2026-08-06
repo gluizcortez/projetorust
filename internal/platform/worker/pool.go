@@ -34,7 +34,12 @@ var ErrPoolEncerrado = errors.New("executor encerrado")
 // Recebe o contexto do executor, NÃO o da requisição que a originou: no legado
 // a tarefa sobrevive à resposta HTTP (reference/main.rs:256), e cancelar o
 // processamento porque o cliente desligou seria comportamento novo.
-type Tarefa func(ctx context.Context)
+//
+// É um APELIDO, não um tipo definido. A porta `usecase.Executor` declara
+// `func(context.Context)`, e um tipo definido não satisfaria a interface — o Go
+// exige assinatura idêntica, e `worker.Tarefa` seria um tipo diferente. O
+// apelido mantém o nome para quem lê e a compatibilidade para o compilador.
+type Tarefa = func(ctx context.Context)
 
 // Pool executa tarefas de segundo plano com teto de concorrência opcional e
 // drenagem por notificação.

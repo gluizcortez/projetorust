@@ -1,13 +1,9 @@
 // Comando recorte-api é o ponto de entrada do serviço de recorte de diários
 // oficiais.
 //
-// Nesta fase (F2) ele carrega a configuração e monta a observabilidade, mas
-// ainda não registra rotas: responde 404 em qualquer caminho, inclusive em
-// /ping. Esse é o estado esperado, documentado nos critérios de aceite da F1.
-//
-// As fases seguintes o preenchem:
-//   - F9  registra as rotas de internal/adapter/httpapi
-//   - F10 move a montagem e o ciclo de vida para internal/app
+// Não tem lógica: carrega a configuração, monta o grafo em internal/app,
+// executa e traduz o erro em código de saída. Toda a montagem está em
+// app.Novo, e todo o encerramento em app.Encerrar.
 package main
 
 import (
@@ -15,15 +11,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
+	"github.com/gluizcortez/projetorust/internal/app"
 	"github.com/gluizcortez/projetorust/internal/config"
 	"github.com/gluizcortez/projetorust/internal/platform/observability"
+	"github.com/gluizcortez/projetorust/internal/platform/shutdown"
 )
 
 // Injetados na compilação com -ldflags "-X main.versao=... -X main.revisao=...".
@@ -32,11 +27,26 @@ var (
 	revisao = "desconhecida"
 )
 
-// Códigos de saída. Ampliados na fase F10, que acrescenta o estouro do teto de
-// encerramento e o segundo sinal.
+// Códigos de saída.
+//
+// O legado tem apenas dois desfechos — sai limpo ou entra em pânico —, e nenhum
+// código próprio. Os três abaixo existem porque o operador precisa distinguir
+// "encerrou como pedido" de "desistiu de esperar", e um supervisor precisa
+// decidir se reinicia.
 const (
-	saidaLimpa    = 0
-	saidaFalha    = 1
+	// saidaLimpa é o encerramento normal.
+	saidaLimpa = 0
+	// saidaFalha é falha de arranque, ou erro durante a execução.
+	saidaFalha = 1
+	// saidaTetoDeEncerramento é SHUTDOWN_TIMEOUT estourado com trabalho
+	// pendente. Só acontece com a chave definida: o padrão zero espera
+	// indefinidamente, como o legado.
+	saidaTetoDeEncerramento = 2
+	// saidaForcada é o segundo sinal durante o encerramento. 130 é a convenção
+	// para "encerrado por SIGINT" (128 + 2).
+	saidaForcada = 130
+	// saidaDoenteHC é o que a sonda de saúde da imagem devolve quando o serviço
+	// não responde. É separada de saidaFalha por clareza, embora coincida.
 	saidaDoenteHC = 1
 )
 
@@ -80,95 +90,36 @@ func executar() int {
 
 	metricas := observability.NovasMetricas()
 
-	if err := servir(ctx, cfg, log, metricas, encerrarTracing); err != nil {
+	escuta := shutdown.Ouvir(ctx)
+	defer escuta.Parar()
+
+	servico, err := app.Novo(ctx, cfg, log, encerrarTracing, metricas, versao, revisao, escuta.Motivo)
+	if err != nil {
+		log.ErrorContext(ctx, "falha ao montar o serviço", "erro", err)
+		// O rastreamento já subiu; esvaziá-lo é o único encerramento devido.
+		_ = encerrarTracing(ctx)
+		return saidaFalha
+	}
+
+	err = servico.Executar(escuta.Contexto, escuta.Forcado)
+
+	switch {
+	case err == nil:
+		return saidaLimpa
+	case errors.Is(err, app.ErrEncerramentoForcado):
+		log.ErrorContext(ctx, "saída forçada", "erro", err)
+		return saidaForcada
+	case errors.Is(err, app.ErrTetoDeEncerramento):
+		log.ErrorContext(ctx, "encerramento incompleto", "erro", err)
+		return saidaTetoDeEncerramento
+	default:
 		log.ErrorContext(ctx, "encerramento com erro", "erro", err)
 		return saidaFalha
 	}
-	return saidaLimpa
-}
-
-// servir sobe o servidor e bloqueia até receber SIGINT ou SIGTERM.
-//
-// O encerramento aqui é o mínimo viável. A ordem completa — parar de aceitar,
-// drenar HTTP, drenar importações, fechar o pool, esvaziar telemetria — é da
-// fase F10.
-func servir(
-	ctx context.Context,
-	cfg *config.Config,
-	log *slog.Logger,
-	metricas *observability.Metricas,
-	encerrarTracing observability.Encerrar,
-) error {
-	ctx, pararSinais := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer pararSinais()
-
-	// As métricas ainda não têm quem as alimente; o pipeline entra na F8.
-	// Referenciá-las aqui mantém a montagem explícita e o compilador honesto
-	// sobre a dependência.
-	_ = metricas
-
-	// Roteador vazio: 404 em qualquer caminho. As rotas entram na fase F9.
-	srv := &http.Server{
-		Addr:              cfg.Endereco(),
-		Handler:           http.NewServeMux(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      5 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 20,
-	}
-
-	log.InfoContext(ctx, "servidor iniciando",
-		"endereco", cfg.Endereco(),
-		"versao", versao,
-		"revisao", revisao,
-		"config", cfg,
-	)
-
-	erros := make(chan error, 1)
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			erros <- err
-		}
-		close(erros)
-	}()
-
-	var motivo string
-	select {
-	case err := <-erros:
-		if err != nil {
-			return fmt.Errorf("escutando em %s: %w", cfg.Endereco(), err)
-		}
-		motivo = "servidor encerrou sozinho"
-	case <-ctx.Done():
-		motivo = "sinal recebido"
-	}
-
-	log.InfoContext(ctx, "encerrando", "motivo", motivo)
-
-	// O contexto de encerramento não pode ser o que acabou de ser cancelado.
-	desligar, cancelar := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancelar()
-
-	var problemas []error
-	if err := srv.Shutdown(desligar); err != nil {
-		problemas = append(problemas, fmt.Errorf("encerrando servidor: %w", err))
-	}
-	if err := encerrarTracing(desligar); err != nil {
-		problemas = append(problemas, err)
-	}
-
-	log.InfoContext(ctx, "encerrado")
-	return errors.Join(problemas...)
 }
 
 // sondarSaude consulta /ping no endereço de escuta. É o comando invocado pelo
 // HEALTHCHECK da imagem, que assim dispensa shell e utilitários de rede.
-//
-// ATENÇÃO: nesta fase o serviço responde 404 em /ping, porque ainda não há
-// manipuladores. A sonda portanto reporta o contêiner como não saudável, e
-// isso é o estado esperado. A fase F9 registra a rota e a sonda passa a obter
-// 200.
 func sondarSaude(endereco string) int {
 	cliente := &http.Client{Timeout: 3 * time.Second}
 	resp, err := cliente.Get("http://" + endereco + "/ping")

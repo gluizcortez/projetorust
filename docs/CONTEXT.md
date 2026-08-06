@@ -1479,3 +1479,158 @@ execuções seguidas sob `-race -shuffle=on`.
 Nenhuma em Go — a camada HTTP usa só a biblioteca padrão. No ferramental,
 `tools/sonda-http` acrescenta `salvo 0.95` e `tokio`, isolados num módulo
 próprio que não entra no binário do serviço.
+
+---
+
+## F10 — Ciclo de vida, sinais e drenagem
+
+**Entregue.** `internal/app` e `internal/platform/shutdown` deixaram de ser
+`doc.go`, e `cmd/recorte-api/main.go` ficou sem lógica: carrega a configuração,
+monta, executa e traduz o erro em código de saída.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `internal/app/app.go` | montagem das 15 peças, `Executar`, `Encerrar`, adaptadores da raiz |
+| `internal/platform/shutdown/shutdown.go` | escuta de sinais, primeiro e segundo |
+| `cmd/recorte-api/main.go` | configuração → montagem → execução → código de saída |
+| `test/e2e/ciclo_de_vida_test.go` | o binário de verdade, com sinais reais |
+
+### O grafo de construção, apresentado antes de codificar
+
+```
+ 1. registrador                observability.NovoLogger
+ 2. rastreamento               observability.IniciarTracing
+ 3. métricas                   observability.NovasMetricas
+ 4. pool de conexões           postgres.NovoPool          ← primeiro recurso externo
+ 5. unidade de trabalho        postgres.NovaUnidadeDeTrabalho
+ 6. repositório de importação  postgres.NovoRepositorioImportacao
+ 7. repositório de perfil      postgres.NovoRepositorioPerfil
+ 8. repositório de recorte     postgres.NovoRepositorioRecorte
+ 9. extrator de texto          pdftext.NovoExtrator
+10. indexador                  searchidx.NovoIndexador
+11. pipeline                   usecase.NovoPipeline
+12. executor                   worker.NovoPool
+13. ingestão                   usecase.NovaIngestao
+14. roteador                   httpapi.NovoRouter
+15. servidor                   httpapi.NovoServidor
+```
+
+E a ordem de encerramento, que **não é a inversa**:
+
+```
+1. servidor HTTP   para de aceitar; o que está em curso termina
+2. importações     drena o executor
+3. pool do banco   fecha
+4. telemetria      esvazia
+```
+
+O servidor para **primeiro** de propósito: enquanto ele aceitar requisições,
+importações novas continuam entrando e a drenagem pode nunca acabar.
+
+### Decisões
+
+**D-F10-01 — o segundo sinal força a saída, e é comportamento NOVO.** O legado
+chama `stop_graceful(None)` no primeiro sinal e ignora os seguintes: diante de
+uma importação travada, o operador só tem SIGKILL. Aceitar o segundo dá a ele
+uma saída ordenada, com registro do que ficou pendente. Só é observável em
+emergência — quando quem opera já decidiu não esperar.
+
+**D-F10-02 — códigos de saída distintos.** O legado tem dois desfechos: sai
+limpo ou entra em pânico. Aqui: `0` limpo, `1` falha de arranque, `2` teto de
+encerramento estourado, `130` segundo sinal. É o que permite a um supervisor
+decidir se reinicia.
+
+**D-F10-03 — `SHUTDOWN_TIMEOUT` continua em zero.** Zero é espera indefinida,
+que é o `DEFEITO PRESERVADO` de §6.3. Definir a chave é evolução.
+
+**D-F10-04 — a drenagem acorda por notificação, o aviso mantém a cadência.**
+Herdado da F8: `sync.WaitGroup` no lugar da sondagem de 100 ms, com o aviso
+`drenando importações` ainda a cada 100 ms para não mudar o volume de registro.
+
+**D-F10-05 — o motivo do encerramento nomeia o sinal.** O legado distingue
+SIGINT de SIGTERM com mensagens diferentes (§6.2). `shutdown.Escuta.Motivo` é
+injetado no `App`, e o registro sai com `motivo="sinal SIGTERM"`.
+
+### Três defeitos meus que os testes pegaram
+
+**1. Corrida no endereço efetivo.** `Executar` sobrescrevia `servidor.Addr` com
+a porta que o sistema escolheu, enquanto `Endereco()` a lia de outra goroutine.
+O `-race` acusou. Corrigido com `atomic.Pointer` num campo próprio: o
+`http.Server` não é mutado depois de entregue às suas goroutines.
+
+**2. O segundo sinal deixava o ouvinte aberto.** `Executar` devolvia
+`ErrEncerramentoForcado` direto, sem passar por `Encerrar` — e o servidor
+continuava escutando num processo que estava saindo. Agora a força atravessa
+`Encerrar`, que corta o prazo de cada etapa mas ainda fecha o ouvinte.
+
+**3. A goroutine do servidor sobrevivia ao retorno.** `Executar` não esperava
+`Serve` terminar. O `goleak` acusou.
+
+**4. O ouvinte de sinais perdia o segundo sinal.** Depois do primeiro, o laço
+selecionava em `ctx.Done()` — que acabara de fechar — e saía antes de o segundo
+chegar. Corrigido com um canal de encerramento próprio, separado do contexto.
+
+### Uma sabotagem que o teste "óbvio" não pegava
+
+Inverter as duas primeiras etapas do encerramento — drenar antes de parar o
+servidor — **passava** em todos os testes de ordem. A razão é que o teste
+observava a sequência de anotações, e a anotação do servidor não estava lá.
+
+`TestServidorParaANTESDaDrenagem` monta o cenário real: um manipulador que
+submete importação a cada requisição, e uma requisição disparada **durante** a
+janela de drenagem. Com a ordem certa a conexão é recusada; com a invertida ela
+é atendida e a drenagem ganha trabalho novo. Esse teste **falha** com a
+sabotagem.
+
+### Uma sabotagem que continua sem teste que morda, e por quê
+
+Remover a espera pela goroutine do servidor (`<-erros`) **não** é detectado pelo
+`goleak`: ele tenta de novo com recuo por algumas centenas de milissegundos, de
+propósito, para não acusar goroutine que está justamente terminando. A goroutine
+do `Serve` termina nessa janela.
+
+A espera continua no código porque é correta — `main` chama `os.Exit` logo
+depois, e sair com uma goroutine de servidor em andamento é cortá-la no meio.
+Mas é justo registrar que ela está justificada por raciocínio, não por teste que
+morde. É a mesma classe do teste de tempo constante da fase F9.
+
+### Medições
+
+```
+go test ./internal/app/... -race -cover -shuffle=on              79,1%
+go test ./internal/app/... -tags integration -race -cover        94,6%
+go test ./internal/platform/shutdown/... -race -cover           100,0%
+go test ./test/e2e/... -tags integration                        7 testes, todos passando
+golangci-lint run ./...                                          0 issues
+```
+
+Os testes de ponta a ponta **compilam o binário, enviam sinais reais e conferem
+o código de saída** — SIGTERM e SIGINT encerram com 0, banco inalcançável sai
+com 1, configuração inválida sai com 1, e a sonda `-healthcheck` da imagem
+responde contra um serviço vivo.
+
+### Uma dependência nova, e a justificativa
+
+| Dependência | Justificativa |
+|---|---|
+| `go.uber.org/goleak` | Só de teste. É o critério de aceite explícito da fase — "goleak não detecta goroutine remanescente" — e está instalado no `TestMain` do pacote inteiro, não em um teste só: qualquer teste que deixe goroutine viva derruba a execução. Não entra no binário. |
+
+### Um alvo do Makefile consertado
+
+`make pg-subir` parou de funcionar: o PostgreSQL sobe, tenta criar o arquivo de
+trava do soquete em `/var/run/postgresql` — que o usuário sem privilégio não
+escreve — e morre. Corrigido com `-k /tmp/pgsock-recorte`. Sem isso, nenhum
+teste de integração da F4 em diante roda neste ambiente.
+
+### Pendências que entram na F11
+
+1. **D-11** e **D-15** seguem bloqueantes.
+2. **D-04** continua sendo o que permite fechar os tempos limite de leitura e
+   escrita do servidor, hoje em zero.
+3. **D-05**, **D-06**, **D-20**: abertas, com padrão provisório implementado.
+4. **INV-P10** continua sem exercício (herdado da F5).
+5. As demais de F0: **D-13**, **D-14**.
+6. As chaves de evolução da F11 — `IDEMPOTENCIA_POR_HASH`, `GRAVACAO_EM_LOTE`,
+   `VALIDAR_ASSINATURA_PDF`, `VARREDURA_ORFAS`, `RATE_LIMIT_RPS`,
+   `STATUS_ENDPOINT`, `HEALTH_ENDPOINTS` — já existem na configuração, são lidas
+   e ainda não têm efeito. É o trabalho da próxima fase.

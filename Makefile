@@ -34,6 +34,10 @@ test:
 ##   cabeçalho de internal/adapter/postgres/integracao_test.go.
 PGBIN   := /usr/lib/postgresql/16/bin
 PGDATA  := /tmp/pgdata-recorte
+# Diretório do soquete unix. O padrão compilado é /var/run/postgresql, que o
+# usuário sem privilégio não consegue escrever neste ambiente — o servidor sobe,
+# falha ao criar o arquivo de trava e morre.
+PGSOCK  := /tmp/pgsock-recorte
 PGPORT  := 55432
 PGUSER  := pgtest
 export TEST_DATABASE_URL ?= postgres://postgres@localhost:$(PGPORT)/postgres?sslmode=disable
@@ -43,9 +47,9 @@ pg-subir:
 		echo "PostgreSQL já responde na porta $(PGPORT)"; exit 0; \
 	fi; \
 	id -u $(PGUSER) >/dev/null 2>&1 || useradd -m $(PGUSER); \
-	rm -rf $(PGDATA); mkdir -p $(PGDATA); chown $(PGUSER) $(PGDATA); \
+	rm -rf $(PGDATA); mkdir -p $(PGDATA) $(PGSOCK); chown $(PGUSER) $(PGDATA) $(PGSOCK); \
 	su $(PGUSER) -c "$(PGBIN)/initdb -D $(PGDATA) -U postgres --auth=trust --encoding=UTF8 --locale=C" >/dev/null; \
-	su $(PGUSER) -c "$(PGBIN)/pg_ctl -D $(PGDATA) -l /tmp/pg-recorte.log -o '-p $(PGPORT)' start"; \
+	su $(PGUSER) -c "$(PGBIN)/pg_ctl -D $(PGDATA) -l /tmp/pg-recorte.log -o '-p $(PGPORT) -k $(PGSOCK)' start"; \
 	$(PGBIN)/pg_isready -h localhost -p $(PGPORT)
 
 ## pg-descer: encerra o PostgreSQL local
@@ -56,7 +60,7 @@ pg-descer:
 ##   Usa TEST_DATABASE_URL. Sem a variável, os testes são pulados com
 ##   mensagem explicativa em vez de falharem.
 test-integration: pg-subir
-	go test ./... -race -tags=integration -run 'Integration|Integracao' -v
+	go test ./... -race -tags=integration -run 'Integration|Integracao|CicloDeVida' -v
 
 ## sonda-http: mede o contrato HTTP do legado reconstruindo o roteador do Salvo
 ##   Resolveu D-07, D-08 e D-10. Reexecutar quando a versão do Salvo de

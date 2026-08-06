@@ -94,9 +94,11 @@ EXPOSE 6001
 
 # A sonda é o próprio binário: sem shell na imagem, não há curl nem wget.
 #
-# ATENÇÃO — estado esperado até a fase F9: não há manipuladores registrados,
-# então /ping responde 404 e o contêiner é marcado como não saudável. A F9
-# registra a rota e a sonda passa a obter 200.
+# A rota /ping foi registrada na fase F9 e responde 200 sem autenticação e sem
+# tocar no banco — como o legado (reference/main.rs:112-115), que responde
+# `pong` mesmo com o PostgreSQL indisponível. A sonda portanto verifica que o
+# PROCESSO está de pé, não que o serviço está funcional; um endpoint de saúde
+# que consulte dependências é evolução da fase F11, atrás de HEALTH_ENDPOINTS.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/recorte-api", "-healthcheck"]
 

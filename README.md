@@ -34,7 +34,7 @@ atrás de chave de configuração desligada por padrão.
 | F7 | Índice e busca | **concluída** — 1.378 combinações + 500 mil casos de propriedade |
 | F8 | Pipeline e máquina de estados | **concluída** — sequência de chamadas fixada, 98,4% de cobertura |
 | F9 | Camada HTTP | **concluída** — contrato byte a byte; D-07, D-08 e D-10 resolvidas por medição |
-| F10 | Ciclo de vida e drenagem | pendente |
+| F10 | Ciclo de vida e drenagem | **concluída** — sinais reais, drenagem por notificação, códigos de saída |
 | F11 | Evoluções técnicas atrás de chaves | pendente |
 | F12 | Paridade e execução em sombra | pendente |
 | F13 | Corte e descomissionamento | pendente |
