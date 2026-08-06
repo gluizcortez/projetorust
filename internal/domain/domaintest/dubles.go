@@ -164,6 +164,11 @@ type RepositorioRecorteFalso struct {
 	ErroNaChamada int
 	Erro          error
 
+	// EntrarEmPanico faz Salvar entrar em pânico. Existe para exercitar a
+	// recuperação do pipeline e do executor: um defeito de programação não
+	// pode derrubar o processo.
+	EntrarEmPanico bool
+
 	Gravacoes []GravacaoObservada
 	chamadas  int
 }
@@ -180,6 +185,10 @@ func (r *RepositorioRecorteFalso) Salvar(
 	r.chamadas++
 	r.Diario.Anotar("Recorte.Salvar(imp=%d, perfil=%d, expressao=%q, n=%d)",
 		idImportacao, chave.IDPerfil, chave.Expressao, len(recortes))
+
+	if r.EntrarEmPanico {
+		panic("dublê de RepositorioRecorte: pânico solicitado pelo teste")
+	}
 
 	if r.ErroNaChamada != 0 && r.chamadas == r.ErroNaChamada {
 		return 0, r.Erro
@@ -236,6 +245,11 @@ type IndiceFalso struct {
 	Textos  map[uint64]string
 	Erro    error
 	Fechado bool
+
+	// ErroFechar é devolvido por Fechar. O legado não tem equivalente — o
+	// Index do Tantivy é derrubado com a tarefa —, então a falha aqui não pode
+	// alterar o desfecho da importação.
+	ErroFechar error
 }
 
 var _ domain.Indice = (*IndiceFalso)(nil)
@@ -263,7 +277,7 @@ func (i *IndiceFalso) Fechar() error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.Fechado = true
-	return nil
+	return i.ErroFechar
 }
 
 // IndexadorFalso implementa domain.Indexador.

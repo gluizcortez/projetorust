@@ -118,6 +118,13 @@ linters:
       - path: ^internal/adapter/postgres/uow\.go$
         linters: [forbidigo]
 
+      # Os dublês do domínio montam cenários de teste, e um deles precisa
+      # ENTRAR EM PÂNICO sob demanda: é assim que se verifica que o pipeline e o
+      # executor sobrevivem a um defeito de programação. O pacote não vai para
+      # produção — nada fora de _test.go o importa.
+      - path: ^internal/domain/domaintest/
+        linters: [forbidigo]
+
       # Testes: podem entrar em pânico, imprimir, dormir e usar auxiliares.
       - path: _test\.go$
         linters: [forbidigo, gosec, wrapcheck, errcheck, contextcheck]

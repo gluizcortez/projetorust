@@ -13,12 +13,12 @@
 
 | ID | Pergunta | Bloqueia | Estado | Responsável |
 |---|---|---|---|---|
-| D-01 | Existe perfil com `id_perfil = 0`? | F8 | aberta | operação |
+| D-01 | Existe perfil com `id_perfil = 0`? | — | **resolvida na F8** · sentinela explícito | operação |
 | D-02 | Qual o `COLLATE` do banco? | F4, F8 | aberta | operação |
 | D-03 | Quais as versões exatas de `tantivy`, `mupdf` e `diacritics`? | **F6, F7** | parcial · limite **medido** | quem mantém o Rust |
 | D-04 | Qual o maior PDF e o maior número de recortes já processados? | F11, F12 | aberta | operação |
-| D-05 | Existem expressões com `"` cadastradas? | F7, F8 | aberta · **efeito medido** | operação |
-| D-06 | O que fazer com padrão de `&` que não compila? | F8 | aberta · **ampliada em F7** | arquitetura |
+| D-05 | Existem expressões com `"` cadastradas? | — | aberta · **padrão provisório implementado na F8** | operação |
+| D-06 | O que fazer com padrão de `&` que não compila? | F11 | aberta · **padrão provisório implementado na F8** | arquitetura |
 | D-07 | Reproduzir ou remover o ramo morto de `main.rs:226–230`? | F9 | aberta | arquitetura |
 | D-08 | Qual a resposta para rota inexistente e método não permitido? | F9 | aberta | captura empírica |
 | D-09 | Manter a distinção entre 401 "ausente" e 401 "inválida"? | F9 | **decidida** | arquitetura |
@@ -54,6 +54,16 @@ em INV-P13.
 **Padrão provisório.** Usar sentinela explícito (ponteiro nulo ou booleano de
 primeira iteração), equivalente nos dois cenários, com comentário citando
 INV-P13.
+
+### Implementado na fase F8 — a pergunta deixou de bloquear
+
+`usecase.deduplicadorPorPerfil` usa um booleano de primeira iteração no lugar do
+`let mut id_perfil: i64 = 0`. `TestINVP13PerfilZeroNaoAlteraOResultado` exercita
+justamente a sequência que distinguiria as duas implementações — perfil 0 na
+primeira chave — e confirma que o resultado é o mesmo.
+
+A resposta continua sendo útil para o inventário do banco, mas **não muda mais
+nenhuma linha de código**: qualquer que seja ela, o comportamento é idêntico.
 
 ---
 
@@ -191,10 +201,18 @@ devolver. Das 78, **75 são bem definidas em Go** e **3 falham por outro motivo*
 operador a recusa.
 
 **Consequência para a decisão.** Reproduzir INV-P17 exige um teste explícito de
-aspas **antes** da busca, no caso de uso — não no índice. É trabalho de F8, e
-depende desta pergunta: se nenhuma expressão de produção tem `"`, o teste é
-código morto e não deve ser escrito. `TestINVP17AspasNaoAbortamABusca` fixa o
-comportamento atual para que a escolha seja consciente.
+aspas **antes** da busca, no caso de uso — não no índice.
+
+### Implementado na fase F8, seguindo o padrão provisório
+
+`usecase.Pipeline.buscar` verifica `strings.ContainsRune(expressao, '"')` antes
+de consultar o índice e, havendo aspas, grava −1 e encerra a importação — o
+desfecho do legado. É o padrão provisório desta ficha: **reproduzir a falha**.
+
+São seis linhas, cobertas por `TestINVP17AspasAbortamAImportacao`. Se a resposta
+for **"não existem expressões com aspas em produção"**, a verificação vira código
+morto e deve ser removida junto com o teste — está marcada no código para que
+isso seja uma remoção de dois lugares, não uma caçada.
 
 ---
 
@@ -267,10 +285,31 @@ não é configurável. Classe aninhada exigiria um analisador de classes com
 álgebra de conjuntos para achatar os intervalos.
 
 **O que decidir, e o custo de não decidir.** A pergunta continua sendo a de
-sempre — reproduzir o estado preso em `3` ou normalizar para `-1`. O que mudou é
-que ela agora **bloqueia F8**, não F7: a busca devolve `ErrExpressaoInvalida` e
-quem escolhe o status é a máquina de estados. Enquanto não houver resposta, F8
-adota o padrão provisório acima.
+sempre — reproduzir o estado preso em `3` ou normalizar para `-1`.
+
+### Implementado na fase F8, seguindo o padrão provisório
+
+`usecase.Pipeline.encerrarPreso` reproduz o efeito observável do pânico: registra
+o evento, contabiliza a métrica de desfecho `preso` e **não grava status algum**.
+A importação fica em `recortando`, exatamente como o legado a deixaria.
+`TestD06ExpressaoInvalidaDeixaAImportacaoPresa` falha se alguém trocar isso por
+`-1`.
+
+Duas observações que só existem por causa da métrica: o legado **não tem** como
+distinguir uma importação presa por pânico de uma presa por queda do processo —
+as duas ficam paradas no mesmo status. O contador `importacoes_total{estado="preso"}`
+torna a primeira visível sem alterar o banco, e é a evidência que a resposta
+desta ficha precisa.
+
+**A normalização para −1 é da fase F11, atrás de chave.** Não pode entrar antes:
+mudaria o estado final de uma importação que hoje trava.
+
+**Um pânico de verdade em Go é caso diferente e recebe tratamento diferente.** O
+único pânico alcançável no legado é o `.unwrap()` desta ficha, que em Go já virou
+erro tipado. Um pânico Go restante é defeito de programação, sem comportamento
+legado a preservar: `Pipeline.recuperarDePanico` registra a pilha e grava −1,
+porque deixar a linha travada em silêncio por causa de um defeito nosso seria a
+pior das opções.
 
 **Como reduzir o risco a zero sem decidir.** As quatro classes só são alcançáveis
 por expressões que contenham sintaxe de expressão regular. Uma consulta resolve:

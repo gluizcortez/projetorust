@@ -32,7 +32,7 @@ atrás de chave de configuração desligada por padrão.
 | F5 | Extração de texto do PDF | **concluída** — 159/159 páginas idênticas |
 | F6 | Normalização e tokenização | **concluída** — 1M casos sem divergência |
 | F7 | Índice e busca | **concluída** — 1.378 combinações + 500 mil casos de propriedade |
-| F8 | Pipeline e máquina de estados | pendente |
+| F8 | Pipeline e máquina de estados | **concluída** — sequência de chamadas fixada, 98,4% de cobertura |
 | F9 | Camada HTTP | pendente |
 | F10 | Ciclo de vida e drenagem | pendente |
 | F11 | Evoluções técnicas atrás de chaves | pendente |

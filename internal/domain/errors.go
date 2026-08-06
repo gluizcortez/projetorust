@@ -45,7 +45,31 @@ var (
 	// expressão inválida ENTRA EM PÂNICO dentro da tarefa do tokio, que morre
 	// SEM atualizar o status: a importação fica presa em 3 para sempre. Um erro
 	// tipado leva a importação a -1, que é um desfecho diferente.
-	// A escolha entre reproduzir o travamento e corrigi-lo é da fase F8 e está
-	// registrada em docs/DECISOES-ABERTAS.md, D-19.
+	// A escolha entre reproduzir o travamento e corrigi-lo está registrada em
+	// docs/DECISOES-ABERTAS.md, D-06. A fase F8 adotou o padrão provisório de
+	// lá: reproduzir o travamento — ver usecase.Pipeline.encerrarPreso.
 	ErrExpressaoInvalida = errors.New("expressão de busca inválida")
 )
+
+// ErroDeValidacao carrega as críticas que rejeitaram a submissão.
+//
+// Existe para que a camada HTTP obtenha a lista sem que o caso de uso precise
+// devolver um terceiro valor de retorno. Satisfaz errors.Is para ErrValidacao e
+// é recuperável com errors.As.
+type ErroDeValidacao struct {
+	Criticas Criticas
+}
+
+// NovoErroDeValidacao embrulha as críticas acumuladas.
+func NovoErroDeValidacao(criticas Criticas) *ErroDeValidacao {
+	return &ErroDeValidacao{Criticas: criticas}
+}
+
+// Error devolve a mensagem exata da resposta 400 — a concatenação por vírgula
+// sem espaço (reference/main.rs:220).
+func (e *ErroDeValidacao) Error() string {
+	return e.Criticas.Mensagem()
+}
+
+// Unwrap liga o erro ao sentinela do domínio.
+func (e *ErroDeValidacao) Unwrap() error { return ErrValidacao }

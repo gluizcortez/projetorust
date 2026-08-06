@@ -1163,3 +1163,144 @@ Nenhuma em Go — o índice usa só a biblioteca padrão. No ferramental em Rust
 `regex-syntax` passou a dependência direta de `tools/capturar-corpus`: já vinha
 transitivamente com `regex`, e fixá-la não muda a resolução, apenas torna a API
 acessível à sonda do modo `x`.
+
+---
+
+## F8 — Pipeline de processamento e máquina de estados
+
+**Entregue.** `internal/usecase` e `internal/platform/worker` deixaram de ser
+apenas `doc.go`. A closure de 80 linhas que o legado dispara de dentro do
+manipulador HTTP virou dois casos de uso e um executor, todos exercitáveis com
+dublês — sem banco, sem PDF e sem rede.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `internal/usecase/processar.go` | `Pipeline`, o laço de recorte e a deduplicação por perfil |
+| `internal/usecase/ingerir.go` | `Ingestao`, o caminho síncrono da submissão |
+| `internal/usecase/portas.go` | portas de `Metricas` e `Executor`, definidas pelo consumidor |
+| `internal/platform/worker/pool.go` | `Pool`: teto opcional, drenagem por notificação, recuperação de pânico |
+| `internal/domain/errors.go` | `ErroDeValidacao`, que carrega as críticas até a camada HTTP |
+
+### A sequência, transcrita antes de codificar
+
+O procedimento da fase exige transcrever a sequência do legado como lista de
+chamadas às portas e conferi-la com `ESPECIFICACAO.md` §3.4 e §5.1 antes de
+escrever código. A lista virou o teste `TestSequenciaDeChamadas`, que compara
+item a item:
+
+```
+Importacao.MarcarInicio(42)                 main.rs:260 — data_inicio ANTES do status
+Importacao.AtualizarStatus(42, selecionado) main.rs:261
+Importacao.AtualizarStatus(42, indexando)   main.rs:268 — ANTES de indexar
+Extrator.ExtrairPaginas(bytes=15)           main.rs:479-506  ┐ criar_indice
+Indexador.Construir(paginas=2)              main.rs:508-535  ┘
+Importacao.AtualizarStatus(42, recortando)  main.rs:272
+Perfil.ChavesPesquisa(42)                   main.rs:274
+Indice.Frase("ALFA")                        main.rs:283      ┐
+Recorte.Salvar(perfil=7, "ALFA", n=1)       main.rs:310      │ laço, uma chave
+Indice.Frase("BETA")                        main.rs:283      │ de cada vez
+Recorte.Salvar(perfil=7, "BETA", n=1)       main.rs:310      ┘
+Importacao.AtualizarStatus(42, finalizado)  main.rs:325
+Importacao.MarcarTermino(42, 2)             main.rs:326
+Indice.Fechar()                             sem equivalente — o Tantivy cai com a tarefa
+```
+
+Uma conferência mudou o código: no legado o registro `Há N recorte(s) a filtrar`
+sai **depois** do reinício do conjunto por perfil e usa a contagem **bruta**,
+antes da deduplicação (`main.rs:291-293`). A ordem natural em Go seria filtrar
+primeiro e registrar o resultado.
+
+### Decisões
+
+**D-F8-01 — o prompt da fase pedia −1 no pânico; a especificação pede o
+contrário, e as duas coisas foram conciliadas.** O enunciado de F8 manda
+"marcar a importação como −1" ao recuperar um pânico. `ESPECIFICACAO.md` §3.5 e
+D-06 dizem que o legado deixa a importação **presa** no último status. A
+contradição é aparente e some quando se separam dois casos:
+
+| Situação | No legado | Em Go |
+|---|---|---|
+| Expressão `&` que não compila | `.unwrap()` → **pânico** → presa em 3 | `ErrExpressaoInvalida` → **presa em 3** (D-06) |
+| Pânico de verdade (defeito nosso) | inalcançável | registra a pilha e grava **−1** |
+
+O único pânico alcançável em Rust virou erro tipado na F7. Um pânico Go restante
+é defeito de programação, sem comportamento legado a preservar — e travar a linha
+em silêncio por causa dele seria a pior das opções. Os dois caminhos têm teste.
+
+**D-F8-02 — D-01 saiu da lista de pendências.** O sentinela explícito (booleano
+de primeira iteração) foi implementado e `TestINVP13PerfilZeroNaoAlteraOResultado`
+prova a equivalência com o zero literal. A resposta continua útil para inventário,
+mas não muda mais nenhuma linha.
+
+**D-F8-03 — INV-P17 é reproduzido no caso de uso, não no índice.** A busca em Go
+não tem analisador de consulta e não falharia com aspas; a verificação está em
+`Pipeline.buscar`, antes da consulta. É o padrão provisório de D-05 —
+reproduzir a falha. São seis linhas, marcadas para remoção conjunta se a
+resposta for "não existem expressões com aspas".
+
+**D-F8-04 — a drenagem acorda por notificação, mas o aviso mantém a cadência do
+legado.** O laço de `main.rs:71-74` sonda a cada 100 ms e registra a cada volta.
+`Pool.Drenar` usa `sync.WaitGroup` e retorna assim que a última tarefa termina;
+o aviso `drenando importações` continua saindo a cada 100 ms para não mudar o
+volume de registro no encerramento. Contexto sem prazo reproduz a espera
+indefinida — que é o `DEFEITO PRESERVADO` de §6.3.
+
+**D-F8-05 — a tarefa recebe um contexto desligado do da requisição.**
+`Submeter` tem dois: um governa a espera por vaga, outro a execução. No legado a
+tarefa sobrevive à resposta HTTP; cancelar o processamento porque o cliente
+desconectou seria comportamento novo. `TestIngestaoTarefaSobreviveAoCancelamentoDaRequisicao`
+e `TestContextoDaTarefaEIndependenteDoDaSubmissao` fixam isso.
+
+**D-F8-06 — a porta de métricas foi definida no caso de uso, não importada de
+`observability`.** A regra de dependência proíbe `internal/usecase` de importar
+`internal/platform`. A interface `usecase.Metricas` tem quatro métodos e um
+padrão nulo; ligá-la ao registro Prometheus é trabalho da raiz de composição,
+na fase F10.
+
+### Como se provou que os testes mordem
+
+Seis sabotagens, cada uma revertida em seguida:
+
+| Sabotagem | Detecção |
+|---|---|
+| status `indexando` gravado depois de indexar | `TestSequenciaDeChamadas`, chamadas 2, 3 e 4 |
+| conjunto de páginas reiniciado a cada chave | `TestINVP12MesmoPerfilMesmaPagina` (2 gravações em vez de 1) e o teste de três perfis |
+| laço de chaves paralelizado | 3 corridas de dados sob `-race` mais falha de resultado |
+| falha de gravação não encerrando a importação | `TestINVP14` (4 gravações permaneceram em vez de 2) |
+| `WaitGroup.Add` movido para dentro da goroutine | `TestDrenarAguardaTodasAsTarefas` (43 de 50 tarefas) |
+| expressão inválida gravando −1 | `TestD06...DeixaAImportacaoPresa`, nos três critérios |
+
+### Medições
+
+```
+go test ./internal/usecase/... -race -cover -shuffle=on           98,4%
+go test ./internal/platform/worker/... -race -cover -shuffle=on   98,2%
+golangci-lint run ./...                                           0 issues
+```
+
+Ambas acima do mínimo de 85% exigido pela fase, sem nenhum banco e nenhum PDF
+real. O que não está coberto são as duas guardas de estouro numérico, que exigem
+mais de dois bilhões de recortes.
+
+### Uma exclusão de linter acrescentada
+
+`internal/domain/domaintest/` passou a ser excluído do `forbidigo`: o dublê de
+`RepositorioRecorte` precisa **entrar em pânico sob demanda**, que é como se
+verifica que o pipeline e o executor sobrevivem a um defeito de programação. O
+pacote não vai para produção — nada fora de `_test.go` o importa.
+
+### Pendências que entram na F9
+
+1. **D-08** e **D-10** (captura empírica de 404/405 e do `Content-Type` exato)
+   passam a ser o caminho crítico: são de F9 e continuam sem resposta.
+2. **D-07** (ramo morto de `main.rs:226-230`) é de F9.
+3. **D-05** e **D-06** continuam abertas, agora com o padrão provisório
+   implementado e testado. D-06 passou a apontar para F11.
+4. **D-11** e **D-15** seguem bloqueantes.
+5. **INV-P10** continua sem exercício (herdado da F5).
+6. As demais de F0: **D-13**, **D-14**.
+
+### Dependências novas
+
+Nenhuma. O caso de uso usa apenas a biblioteca padrão e o domínio; o executor
+usa `context`, `sync` e `log/slog`.
