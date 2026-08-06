@@ -23,6 +23,8 @@ var variaveis = []string{
 	"GRAVACAO_EM_LOTE", "VALIDAR_ASSINATURA_PDF", "VARREDURA_ORFAS",
 	"RESPOSTA_PROBLEM_JSON", "RATE_LIMIT_RPS", "STATUS_ENDPOINT",
 	"HEALTH_ENDPOINTS", "LOG_NIVEL", "LOG_FORMATO", "OTEL_EXPORTER_OTLP_ENDPOINT",
+	"HTTP_TEMPO_LIMITE_CABECALHO", "HTTP_TEMPO_LIMITE_LEITURA",
+	"HTTP_TEMPO_LIMITE_ESCRITA", "HTTP_TEMPO_LIMITE_OCIOSO", "HTTP_MAX_HEADER_BYTES",
 }
 
 // ambienteLimpo remove todas as variáveis conhecidas e as restaura ao final.
@@ -454,5 +456,57 @@ func TestContextoCanceladoInterrompe(t *testing.T) {
 	cancelar()
 	if _, err := config.Carregar(ctx); err == nil {
 		t.Error("contexto cancelado deveria interromper a carga")
+	}
+}
+
+// TestTemposLimiteHTTPPadrao fixa a escolha da fase F9: leitura e escrita
+// nascem SEM limite, porque qualquer valor finito cortaria o envio de um diário
+// grande por enlace lento. Ver internal/adapter/httpapi/servidor.go e D-04.
+func TestTemposLimiteHTTPPadrao(t *testing.T) {
+	ambienteLimpo(t)
+	t.Setenv("DATABASE_URL", "postgres://u:s@h:5432/d")
+	t.Setenv("API_KEY", "chave")
+
+	cfg, err := config.Carregar(context.Background())
+	if err != nil {
+		t.Fatalf("Carregar: %v", err)
+	}
+
+	if cfg.HTTPTempoLimiteDeCabecalho != 10*time.Second {
+		t.Errorf("cabeçalho = %v; esperava 10s", cfg.HTTPTempoLimiteDeCabecalho)
+	}
+	if cfg.HTTPTempoLimiteDeLeitura != 0 {
+		t.Errorf("leitura = %v; deve nascer SEM limite", cfg.HTTPTempoLimiteDeLeitura)
+	}
+	if cfg.HTTPTempoLimiteDeEscrita != 0 {
+		t.Errorf("escrita = %v; deve nascer SEM limite", cfg.HTTPTempoLimiteDeEscrita)
+	}
+	if cfg.HTTPTempoLimiteOcioso != 120*time.Second {
+		t.Errorf("ocioso = %v; esperava 120s", cfg.HTTPTempoLimiteOcioso)
+	}
+	if cfg.HTTPMaxHeaderBytes != 1<<20 {
+		t.Errorf("max_header_bytes = %d", cfg.HTTPMaxHeaderBytes)
+	}
+}
+
+// TestTemposLimiteHTTPConfiguraveis: quem souber o tamanho máximo real dos
+// documentos (D-04) pode fechar os dois zeros.
+func TestTemposLimiteHTTPConfiguraveis(t *testing.T) {
+	ambienteLimpo(t)
+	t.Setenv("DATABASE_URL", "postgres://u:s@h:5432/d")
+	t.Setenv("API_KEY", "chave")
+	t.Setenv("HTTP_TEMPO_LIMITE_LEITURA", "5m")
+	t.Setenv("HTTP_TEMPO_LIMITE_ESCRITA", "90")
+
+	cfg, err := config.Carregar(context.Background())
+	if err != nil {
+		t.Fatalf("Carregar: %v", err)
+	}
+	if cfg.HTTPTempoLimiteDeLeitura != 5*time.Minute {
+		t.Errorf("leitura = %v; esperava 5m", cfg.HTTPTempoLimiteDeLeitura)
+	}
+	// Inteiro simples é interpretado como segundos.
+	if cfg.HTTPTempoLimiteDeEscrita != 90*time.Second {
+		t.Errorf("escrita = %v; esperava 90s", cfg.HTTPTempoLimiteDeEscrita)
 	}
 }

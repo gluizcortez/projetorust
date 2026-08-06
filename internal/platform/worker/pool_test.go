@@ -265,39 +265,51 @@ func TestPanicoLiberaVaga(t *testing.T) {
 
 // TestSemTetoNaoBloqueia é a paridade: com MAX_IMPORTACOES_CONCORRENTES em
 // zero, `Submeter` nunca espera, como `tokio::task::spawn`.
+//
+// A prova de que TODAS as tarefas correm ao mesmo tempo é uma BARREIRA: cada uma
+// só termina depois que as 200 chegaram. Com teto menor que 200 isso travaria;
+// sem teto, conclui.
+//
+// A primeira versão deste teste media o "pico de concorrência" observado e
+// exigia pelo menos 2. Era um mau substituto da propriedade: sem teto o
+// executor não IMPEDE o paralelismo, mas também não o GARANTE — o escalonador
+// pode rodar as goroutines em sequência, e o teste falhava de forma
+// intermitente. `-shuffle=on` encontrou o caso.
 func TestSemTetoNaoBloqueia(t *testing.T) {
 	p := worker.NovoPool(loggerMudo(), 0)
 
 	const tarefas = 200
-	liberar := make(chan struct{})
-	var ativas atomic.Int64
-	var pico atomic.Int64
+	chegaram := make(chan struct{}, tarefas)
+	barreira := make(chan struct{})
 
 	for range tarefas {
 		if err := p.Submeter(context.Background(), context.Background(), func(context.Context) {
-			atual := ativas.Add(1)
-			for {
-				anterior := pico.Load()
-				if atual <= anterior || pico.CompareAndSwap(anterior, atual) {
-					break
-				}
-			}
-			<-liberar
-			ativas.Add(-1)
+			chegaram <- struct{}{}
+			<-barreira
 		}); err != nil {
 			t.Fatalf("Submeter: %v", err)
 		}
 	}
+
+	// Submeter não pode ter bloqueado nenhuma vez.
 	if n := p.Aguardando(); n != 0 {
 		t.Errorf("Aguardando = %d sem teto de concorrência", n)
 	}
 
-	close(liberar)
+	// As 200 precisam CHEGAR antes de qualquer uma poder sair. Se o executor
+	// serializasse, este laço travaria — daí o prazo.
+	limite := time.After(10 * time.Second)
+	for i := range tarefas {
+		select {
+		case <-chegaram:
+		case <-limite:
+			t.Fatalf("só %d de %d tarefas chegaram; o executor está serializando", i, tarefas)
+		}
+	}
+
+	close(barreira)
 	if err := p.Drenar(context.Background()); err != nil {
 		t.Fatalf("Drenar: %v", err)
-	}
-	if pico.Load() < 2 {
-		t.Errorf("pico de concorrência = %d; sem teto deveria haver paralelismo", pico.Load())
 	}
 }
 

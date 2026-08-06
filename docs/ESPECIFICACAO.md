@@ -74,7 +74,7 @@ falha, no pior caso é a cadeia vazia.
 | Autenticação | **nenhuma** (`main.rs:52`) |
 | Código | `200` |
 | Corpo | `pong` (`main.rs:114`) |
-| `Content-Type` | `text/plain; charset=utf-8` — **`INFERIDO — confirmar`** |
+| `Content-Type` | `text/plain; charset=utf-8` — **MEDIDO** na fase F9 |
 
 Não verifica o banco nem qualquer dependência. Responde `pong` com o
 PostgreSQL indisponível.
@@ -93,8 +93,8 @@ Autenticado. Corpo `multipart/form-data`.
 | `id-caderno` | texto | inteiro `i32` | `main.rs:142`, análise em `191` |
 | `pdf` | arquivo | — | `main.rs:143` |
 
-Os nomes usam **hífen**, não sublinhado. Campos repetidos: prevalece o primeiro
-(comportamento de `req.form`). **`INFERIDO — confirmar`**
+Os nomes usam **hífen**, não sublinhado. Campos repetidos: prevalece o
+**primeiro** — **MEDIDO** na fase F9 contra multipart real.
 
 `%Y-%m-%d` é **permissivo**, ao contrário do que esta especificação afirmava
 até a fase F3. Medido contra chrono 0.4: `2024-3-15`, `2024-03-5`, `24-03-15`,
@@ -146,7 +146,9 @@ Data do caderno é inválida,Data de disponibilização é inválida,Id do usuá
 | R5 | Sucesso | `200` | `PDF carregado com sucesso` | 339–340 |
 | R6 | Ramo inalcançável (ver §1.4.5) | `400` | `[ID Requisição: {id_requisicao}] -> PDF não enviado` | 226–230 |
 
-`Content-Type` de todas: `text/plain; charset=utf-8`. **`INFERIDO — confirmar`**
+`Content-Type` de todas: `text/plain; charset=utf-8`. **MEDIDO** na fase F9 por
+`tools/sonda-http`, para as três formas de renderização que o legado usa —
+`Text::Plain(&str)`, `&String` e `&'static str`. Ver `DECISOES-ABERTAS.md`, D-10.
 
 R1 e R2 têm textos **distintos**. A diferença revela se a chave existe — é
 divulgação de informação, e é contrato existente. Preservada. Ver
@@ -165,13 +167,13 @@ if let Some(key) = req.headers().get("X-API-KEY") {   // main.rs:119
 ```
 
 - Nome do cabeçalho: `X-API-KEY`. A busca em `HeaderMap` é insensível a
-  maiúsculas, então `x-api-key` também é aceito. **`INFERIDO — confirmar`**
+  maiúsculas, então `x-api-key` também é aceito. **MEDIDO** na fase F9.
 - Comparação de `HeaderValue` com `&str`: byte a byte, com **encerramento
   antecipado**. Vulnerável a ataque de tempo. **`DEFEITO PRESERVADO`** quanto ao
   resultado; a reescrita usa comparação de tempo constante, o que não altera
   nenhuma resposta observável.
 - Cabeçalho presente e vazio ⇒ R2 (diferente da constante).
-- Cabeçalho repetido: `HeaderMap::get` devolve o primeiro. **`INFERIDO — confirmar`**
+- Cabeçalho repetido: `HeaderMap::get` devolve o primeiro. **MEDIDO** na fase F9.
 
 #### 1.4.5 Caminho inalcançável em `main.rs:226–230`
 
@@ -180,8 +182,30 @@ tivesse sido acrescentada em `211`, o que faria `218` retornar antes. O bloco é
 **código morto**.
 
 Sua mensagem (`main.rs:228`) usa uma string literal sem interpolação: as chaves
-`{id_requisicao}` sairiam **cruas** na resposta. Ver `DECISOES-ABERTAS.md`,
-D-07, para a decisão sobre reproduzir ou remover.
+`{id_requisicao}` sairiam **cruas** na resposta. **D-07 foi resolvida na fase
+F9: o bloco não é portado.**
+
+#### 1.4.5.1 Segundo caminho inalcançável — `PDF não possui nome`
+
+**Descoberto na fase F9 por medição.** A crítica de `main.rs:207` exige
+`req.file("pdf")` devolvendo `Some` com `name()` a `None`. Não existe corpo
+multipart que produza esse estado:
+
+| `Content-Disposition` da parte `pdf` | `req.file("pdf")` | Resultado |
+|---|---|---|
+| `filename` ausente | `None` | crítica `PDF não enviado` |
+| `filename=""` | `Some`, nome `""` | **aceito**, grava nome vazio |
+| `filename=" "` | `Some`, nome `" "` | aceito |
+
+O parâmetro `filename` é o que faz a parte ser um arquivo; havendo arquivo,
+sempre há nome. A crítica é **código morto**, como o bloco de 226–230.
+
+**Armadilha de paridade.** O `ParseMultipartForm` do Go classifica
+`filename=""` como VALOR, não como arquivo — porque `Part.FileName()` devolve a
+cadeia vazia tanto para `filename=""` quanto para `filename` ausente. Usá-lo
+transformaria uma requisição hoje ACEITA em `400 PDF não enviado`. A camada HTTP
+analisa as partes à mão por causa disso; ver
+`internal/adapter/httpapi/multipart.go`.
 
 #### 1.4.6 Sequência do caminho síncrono
 
@@ -202,11 +226,36 @@ D-07, para a decisão sobre reproduzir ou remover.
 arquivo enviado no campo `pdf` é aceito; a falha só aparece no processamento
 assíncrono, como status −1.
 
-### 1.5 Rota inexistente e método não permitido
+### 1.5 Rota inexistente e método não permitido — **MEDIDO**
 
-Comportamento padrão do roteador do Salvo. **`INFERIDO — confirmar`** — deve ser
-capturado empiricamente contra o serviço em execução e registrado aqui antes de
-virar teste normativo em F9. Ver `DECISOES-ABERTAS.md`, D-08.
+Capturado na fase F9 por `tools/sonda-http`, que reconstrói o roteador de
+`main.rs:52-60`. Detalhe completo em `DECISOES-ABERTAS.md`, **D-08**.
+
+| Requisição | Código |
+|---|---|
+| `GET /naoexiste` | 404 |
+| `GET /` | **405** — e não 404 |
+| `POST /ping`, `DELETE /ping` | 405 |
+| `GET /pdf`, com ou **sem** chave | **405** — o método perde antes da autenticação |
+| `GET /ping/` | **200** |
+| `GET /PING` | 404 — o caminho é sensível a maiúsculas |
+
+**O corpo depende do cabeçalho `Accept`.** O catcher do Salvo negocia conteúdo:
+
+| `Accept` | `Content-Type` | Corpo |
+|---|---|---|
+| ausente, `*/*`, `text/html` | `text/html` | página de 905 bytes (404) / 944 (405) |
+| `application/json` | `application/json` | `{"error":{"code":…,"name":…,"brief":…}}` |
+| `text/plain` | `text/plain` | `code: …\n\nname: …\n\nbrief: …` |
+| `application/xml` | `application/xml` | `<?xml …><Data>…</Data>` |
+
+**Normalização de caminho:** o caminho é partido em segmentos, e segmentos
+vazios e `.` são ignorados. `/ping`, `/ping/`, `/ping//`, `//ping`, `/ping///` e
+`/./ping` chegam todos ao mesmo manipulador; `/ping/x` não chega.
+
+⚠ O HTML foi medido contra **salvo 0.95.2** e não é contrato estável entre
+versões do arcabouço. Status, `Content-Type` e negociação são. Reconfirmar
+quando **D-15** for respondida.
 
 ---
 

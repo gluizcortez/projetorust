@@ -1304,3 +1304,178 @@ pacote não vai para produção — nada fora de `_test.go` o importa.
 
 Nenhuma. O caso de uso usa apenas a biblioteca padrão e o domínio; o executor
 usa `context`, `sync` e `log/slog`.
+
+---
+
+## F9 — Camada HTTP e contrato de resposta
+
+**Entregue.** `internal/adapter/httpapi` deixou de ser `doc.go`: roteador,
+cadeia de middleware, análise de multipart, camada de resposta com duas
+implementações e servidor com tempos limite explícitos.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `httpapi/router.go` | rotas, cadeia, manipuladores, normalização de caminho |
+| `httpapi/catcher.go` | 404 e 405 do Salvo, com negociação de conteúdo |
+| `httpapi/multipart.go` | análise fiel das partes, incluindo a divergência do `filename` |
+| `httpapi/servidor.go` | `http.Server` com os cinco tempos limite |
+| `httpapi/middleware/middleware.go` | identificador, registro, recuperação, limite, autenticação |
+| `httpapi/resposta/resposta.go` | texto (padrão) e problem+json (atrás de chave) |
+| `tools/sonda-http/` | **a sonda que resolveu D-07, D-08 e D-10** |
+
+### A sonda, e por que ela mudou a fase
+
+D-08 e D-10 estavam abertas desde a F0 com o rótulo "captura empírica" e
+bloqueavam esta fase. Em vez de adotar o padrão provisório, `tools/sonda-http`
+reconstrói o roteador de `main.rs:52-60` **com o Salvo de verdade** e pergunta.
+
+O que a medição devolveu foi bem mais específico do que "o padrão do roteador",
+e três achados mudaram o código:
+
+**1. O catcher negocia conteúdo.** O corpo do 404 e do 405 depende do `Accept`:
+HTML de 905/944 bytes por padrão, JSON, texto ou XML conforme o cabeçalho. O
+`http.NotFound` do Go devolveria `404 page not found\n` em `text/plain` para
+todos os casos — corpo, tipo e negociação errados de uma vez.
+
+**2. O caminho é normalizado por segmentos.** `/ping/`, `/ping//`, `//ping`,
+`/ping///` e `/./ping` respondem `pong`; `/ping/x` não. O `ServeMux` do Go
+devolveria 404 para as cinco primeiras. **Sem essa descoberta, seis formas que
+hoje funcionam passariam a falhar.**
+
+**3. `GET /pdf` sem chave devolve 405, não 401.** O método perde antes da
+autenticação — o hoop nem roda.
+
+### A divergência que só apareceu porque a sonda foi ao multipart
+
+Medindo a classificação da parte `pdf`, os dois analisadores discordam:
+
+| `Content-Disposition` | Salvo | `ParseMultipartForm` do Go |
+|---|---|---|
+| `filename="diario.pdf"` | arquivo | arquivo |
+| `filename=""` | **arquivo**, nome `""` → **200** | **valor** → 400 `PDF não enviado` |
+| sem `filename` | valor → 400 | valor → 400 |
+| `filename=" "` | arquivo | arquivo |
+
+`Part.FileName()` do Go devolve a cadeia vazia nos dois casos que precisam ser
+distinguidos. A camada HTTP analisa as partes à mão e testa a PRESENÇA do
+parâmetro `filename`, que é a regra do Salvo.
+
+E daí saiu um achado de espeficicação: **`PDF não possui nome` (main.rs:207) é
+inalcançável** — sem `filename` não há arquivo, e com `filename` sempre há nome.
+É o segundo ramo morto do manipulador, ao lado do de 226-230.
+
+### Decisões
+
+**D-F9-01 — o HTML do catcher é reproduzido BYTE A BYTE, rodapé do Salvo
+incluído.** O serviço em Go passa a anunciar um arcabouço em Rust que não usa
+mais. É correto pela regra do projeto — preservar corpo de resposta — e estranho
+na prática. Registrado como **D-20**, com a observação de que convém decidir
+junto com D-15: se a versão de produção do Salvo tiver outro HTML, o byte a byte
+atual está errado de qualquer forma.
+
+**D-F9-02 — o teste de tempo constante NÃO garante o achado A02, e isso foi
+medido.** O critério de aceite pedia 10.000 medições com prefixos de 0, 8, 16 e
+32 bytes corretos. O teste existe e passa — mas passa **também com `==` de
+cadeia**, verificado por sabotagem: as medianas ficam em 743, 791, 786 e 739 ns
+nos dois casos. A comparação inteira de 36 bytes custa poucos nanossegundos
+dentro de uma requisição de ~750 ns, e o `==` do Go usa `memequal`, palavra a
+palavra. O sinal fica duas ordens de grandeza abaixo do ruído.
+
+Quem garante A02 é `TestComparacaoDeChaveUsaTempoConstante`, **estrutural**:
+analisa a árvore sintática do middleware e exige a chamada a
+`subtle.ConstantTimeCompare`, recusando comparação por igualdade da credencial.
+Esse **falha** com a sabotagem. O teste de tempo fica como detector de regressão
+grosseira e como registro da medição.
+
+**D-F9-03 — os tempos limite de leitura e escrita nascem em ZERO.** Qualquer
+valor finito cortaria o envio de um diário grande por enlace lento, que é
+mudança de comportamento observável — e o relógio de escrita do Go começa a
+contar na leitura do cabeçalho, então limitar a escrita limitaria também o
+envio. `ReadHeaderTimeout` fica em 10 s, que fecha a porta ao cabeçalho lento
+sem tocar no corpo. Fechar os dois zeros depende de **D-04**.
+
+**D-F9-04 — pânico vira 500, que é comportamento NOVO.** No Salvo o pânico
+derruba a tarefa da conexão e o cliente recebe a conexão fechada, sem resposta.
+Responder 500 com corpo VAZIO é deliberado: qualquer texto seria invenção, e a
+alternativa é o cliente não distinguir "o serviço caiu" de "a rede caiu".
+
+**D-F9-05 — o identificador de requisição é ECOADO na resposta.** O Salvo só o
+define na requisição. Devolvê-lo não altera corpo nem código e é o que permite a
+quem chamou correlacionar sua requisição com o registro do serviço.
+
+### Risco aceito, registrado
+
+**Os dois textos de 401 continuam distintos** (D-09). `Faltou a X-API-KEY` e
+`X-API-KEY inválida` revelam se a chave existe — é divulgação de informação, e é
+contrato existente. Unificá-los quebraria clientes que hoje distinguem os casos.
+Fica como está, e este parágrafo é o registro do risco que o prompt da fase pede.
+
+### Como se provou que os testes mordem
+
+Cinco sabotagens, cada uma revertida em seguida:
+
+| Sabotagem | Detecção |
+|---|---|
+| catcher trocado por `http.NotFound`/`http.Error` | 24 divergências de corpo e tipo |
+| normalização de barras removida | 4 rotas que hoje respondem `pong` viram 404 |
+| `ParseMultipartForm` no lugar da análise manual | `filename=""` vira 400 em vez de 200 |
+| os dois textos de 401 unificados | corpo diverge byte a byte, 18 contra 19 bytes |
+| `subtle.ConstantTimeCompare` trocado por `==` | **o teste de tempo NÃO pega**; o estrutural pega |
+
+A quinta linha é o achado da fase: uma sabotagem que o teste "óbvio" não detecta.
+
+### Medições
+
+```
+go test ./internal/adapter/httpapi/... -race -cover -shuffle=on    92,2%
+golangci-lint run ./...                                            0 issues
+```
+
+Tabela de contrato verificada byte a byte, oito respostas:
+
+| resposta | origem | status | Content-Type |
+|---|---|---|---|
+| `GET /ping` | main.rs:112-115 | 200 | `text/plain; charset=utf-8` |
+| R1 sem `X-API-KEY` | main.rs:125-128 | 401 | `text/plain; charset=utf-8` |
+| R2 chave diferente | main.rs:120-123 | 401 | `text/plain; charset=utf-8` |
+| R3 críticas | main.rs:218-224 | 400 | `text/plain; charset=utf-8` |
+| R4 falha ao registrar | main.rs:239-244 | 422 | `text/plain; charset=utf-8` |
+| R5 sucesso | main.rs:339-340 | 200 | `text/plain; charset=utf-8` |
+| R6 rota inexistente | catcher, medido | 404 | `text/html` |
+| R7 método não permitido | catcher, medido | 405 | `text/html` |
+
+### Um teste da fase F8 estava errado, e o `-shuffle=on` pegou
+
+`TestSemTetoNaoBloqueia` media o "pico de concorrência" observado e exigia pelo
+menos 2. Era um mau substituto da propriedade: sem teto o executor não IMPEDE o
+paralelismo, mas também não o GARANTE — o escalonador pode rodar as goroutines
+em sequência, e aí o pico é 1.
+
+Reescrito com uma BARREIRA: cada uma das 200 tarefas só termina depois que todas
+as 200 chegaram. Com teto menor que 200 isso travaria; sem teto, conclui. Agora
+o teste mede a propriedade em vez de um efeito colateral dela, e passa em 15
+execuções seguidas sob `-race -shuffle=on`.
+
+### Decisões abertas que fecharam
+
+- **D-07** resolvida: o ramo morto não é portado, e um SEGUNDO ramo morto foi
+  descoberto (`PDF não possui nome`).
+- **D-08** resolvida por medição, com muito mais detalhe do que a pergunta pedia.
+- **D-10** resolvida por medição; a inferência da especificação estava certa.
+- **D-20** aberta: o rodapé "salvo" nas páginas de erro.
+
+### Pendências que entram na F10
+
+1. **D-11** e **D-15** seguem bloqueantes. D-15 ganhou peso: a versão do Salvo
+   determina se o HTML do catcher está certo.
+2. **D-04** passou a ter consequência de código: é ela que permite fechar os
+   tempos limite de leitura e escrita.
+3. **D-05**, **D-06**, **D-20**: abertas, com padrão provisório implementado.
+4. **INV-P10** continua sem exercício (herdado da F5).
+5. As demais de F0: **D-13**, **D-14**.
+
+### Dependências novas
+
+Nenhuma em Go — a camada HTTP usa só a biblioteca padrão. No ferramental,
+`tools/sonda-http` acrescenta `salvo 0.95` e `tokio`, isolados num módulo
+próprio que não entra no binário do serviço.

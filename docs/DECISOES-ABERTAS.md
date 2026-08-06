@@ -19,10 +19,10 @@
 | D-04 | Qual o maior PDF e o maior número de recortes já processados? | F11, F12 | aberta | operação |
 | D-05 | Existem expressões com `"` cadastradas? | — | aberta · **padrão provisório implementado na F8** | operação |
 | D-06 | O que fazer com padrão de `&` que não compila? | F11 | aberta · **padrão provisório implementado na F8** | arquitetura |
-| D-07 | Reproduzir ou remover o ramo morto de `main.rs:226–230`? | F9 | aberta | arquitetura |
-| D-08 | Qual a resposta para rota inexistente e método não permitido? | F9 | aberta | captura empírica |
+| D-07 | Reproduzir ou remover o ramo morto de `main.rs:226–230`? | — | **resolvida na F9** · inalcançável, não portado | arquitetura |
+| D-08 | Qual a resposta para rota inexistente e método não permitido? | — | **RESOLVIDA na F9** · medida | captura empírica |
 | D-09 | Manter a distinção entre 401 "ausente" e 401 "inválida"? | F9 | **decidida** | arquitetura |
-| D-10 | Qual o `Content-Type` exato de cada resposta? | F9 | aberta | captura empírica |
+| D-10 | Qual o `Content-Type` exato de cada resposta? | — | **RESOLVIDA na F9** · medida | captura empírica |
 | D-11 | Corpus de PDFs reais e *dump* de perfis | **F5, F6, F7, F12** | aberta · **BLOQUEANTE** | operação |
 | D-12 | O `search_path` é assumido em algum lugar? | F4 | aberta | operação |
 | D-13 | Qual o esquema real das sete tabelas? | F4 | aberta | operação |
@@ -31,6 +31,7 @@
 | D-16 | Qual o limite prático de resposta para `MAX_UPLOAD_BYTES`? | F11 | aberta | produto |
 | D-17 | Quantos perfis têm expressões acentuadas (hoje inertes)? | — | aberta · **escalar a produto** | produto |
 | D-18 | PDFs truncados chegam em produção? | — | aberta · **escalar a produto** | operação |
+| D-20 | O rodapé "salvo" pode sair das páginas de 404 e 405? | — | aberta | produto |
 
 ---
 
@@ -325,49 +326,97 @@ produção, e D-06 deixa de ser risco para virar nota de rodapé.
 
 ---
 
-## D-07 · Reproduzir ou remover o ramo morto de `main.rs:226–230`?
+## D-07 · Reproduzir ou remover o ramo morto de `main.rs:226–230`? — **RESOLVIDA**
 
 **Por que importa.** O bloco é inalcançável (`ESPECIFICACAO.md`, §1.4.5) e sua
 mensagem contém chaves de interpolação não expandidas, que sairiam cruas na
 resposta.
 
-**Como verificar.** Confirmar a inalcançabilidade com cobertura de código sobre
-o binário Rust instrumentado, ou por inspeção — a demonstração já está em
-`MAPA-DE-CHAMADAS.md`, §4.4.
+**Resolvida na fase F9: o bloco NÃO foi portado.** Código comprovadamente
+inalcançável não tem comportamento observável, logo omiti-lo não viola a regra de
+paridade. A demonstração está em `MAPA-DE-CHAMADAS.md` §4.4: a crítica
+`PDF não enviado` em `main.rs:211` faz `main.rs:218` retornar antes.
 
-**Padrão provisório.** **Não portar o bloco.** Justificativa: código
-comprovadamente inalcançável não tem comportamento observável, logo omiti-lo
-não viola a regra de paridade. Registrar a omissão em `CONTEXT.md` e no
-registro de decisão arquitetural, com a demonstração de inalcançabilidade
-anexada. Se a demonstração for refutada, o bloco volta com a mensagem literal,
-chaves cruas inclusive.
+### E a fase F9 encontrou um SEGUNDO ramo inalcançável
 
----
+A crítica **`PDF não possui nome`** (`main.rs:207`) exige `req.file("pdf")`
+devolvendo `Some` com `name()` a `None`. A sonda tentou as três formas de chegar
+a esse estado:
 
-## D-08 · Qual a resposta para rota inexistente e método não permitido?
+| `Content-Disposition` da parte `pdf` | Resultado no legado |
+|---|---|
+| `filename` **ausente** | não é arquivo → `PDF não enviado` |
+| `filename=""` | **é** arquivo, nome `""` → **aceito, 200** |
+| `filename=" "` | é arquivo, nome `" "` → aceito, 200 |
 
-**Por que importa.** Não está no código: é comportamento padrão do roteador do
-Salvo. Os testes de contrato de F9 precisam do valor exato.
+Não há caminho: sem `filename` não existe arquivo, e com `filename` sempre existe
+nome. **A crítica é inalcançável pela camada HTTP.**
 
-**Como verificar.** Captura empírica contra o serviço em execução:
+Ela continua implementada em `domain.SubmissaoPDF.Validar`, porque o domínio não
+sabe de onde vem a submissão. O que a fase F9 garante é que o caminho HTTP se
+comporta como o legado, e `TestClassificacaoDaParteDoArquivo` fixa as quatro
+linhas da tabela acima.
+
+## D-08 · Qual a resposta para rota inexistente e método não permitido? — **RESOLVIDA**
+
+**Resolvida na fase F9 por medição.** `tools/sonda-http` reconstrói o roteador de
+`reference/main.rs:52-60` com o mesmo encadeamento de hoops e pergunta ao próprio
+Salvo. O resultado é bem mais específico do que "o padrão do roteador".
+
+### Códigos
+
+| Requisição | Código | Observação |
+|---|---|---|
+| `GET /naoexiste` | **404** | |
+| `GET /` | **405** | e **não** 404 |
+| `POST /ping` | **405** | |
+| `DELETE /ping` | **405** | |
+| `GET /pdf` **com** chave | **405** | |
+| `GET /pdf` **sem** chave | **405** | o método perde **antes** da autenticação — não é 401 |
+| `GET /ping/` | **200** | barra ao final é normalizada |
+| `GET /PING` | **404** | o caminho é sensível a maiúsculas |
+
+### O catcher NEGOCIA CONTEÚDO
+
+Esta é a parte que um porte ingênuo perderia inteira. O corpo depende do
+cabeçalho `Accept`:
+
+| `Accept` | `Content-Type` | Corpo |
+|---|---|---|
+| ausente, `*/*` ou `text/html` | `text/html` | página de **905 bytes** (404) ou **944** (405) |
+| `application/json` | `application/json` | `{"error":{"code":404,"name":"Not Found","brief":"…"}}` |
+| `text/plain` | `text/plain` | `code: 404\n\nname: Not Found\n\nbrief: …` |
+| `application/xml` | `application/xml` | `<?xml …><Data><code>404</code>…</Data>` |
+
+O `http.NotFound` do Go devolveria `404 page not found\n` em `text/plain` para
+todos os casos — corpo, tipo e negociação errados de uma vez só.
+
+### Normalização de caminho
+
+Medida separadamente: o caminho é partido em segmentos, e segmentos **vazios** e
+`.` são ignorados. Todos estes chegam ao mesmo manipulador:
+
 ```
-GET  /rota-inexistente        → código, Content-Type, corpo
-POST /ping                    → código, Content-Type, corpo
-GET  /pdf                     → código, Content-Type, corpo
-DELETE /pdf                   → código, Content-Type, corpo
-HEAD /ping                    → código, corpo
+/ping    /ping/    /ping//    //ping    /ping///    /./ping
 ```
-Registrar o resultado literal em `ESPECIFICACAO.md`, §1.5.
 
-**Observação.** `GET /pdf` e `DELETE /pdf` são especialmente relevantes: é
-preciso saber se o middleware de autenticação executa **antes** ou **depois** da
-resolução de método — ou seja, se uma requisição sem `X-API-KEY` para
-`GET /pdf` responde `401` ou `405`.
+e `/ping/x` **não** chega. O `ServeMux` do Go não faz isso: com o padrão
+`/ping`, uma requisição a `/ping/` devolve 404. Sem a normalização,
+**seis formas que hoje respondem `pong` passariam a responder 404.**
 
-**Padrão provisório.** Nenhum. É captura empírica barata e deve ser feita antes
-de F9.
+### O que ficou implementado
 
----
+`internal/adapter/httpapi/catcher.go` reproduz tudo, com o HTML **byte a byte**,
+inclusive o rodapé com o link para `salvo.rs`. Preservar é a regra do projeto; a
+remoção do rodapé está proposta em **D-20**.
+
+### Ressalva de versão
+
+A medição vale para **salvo 0.95.2**, fixado em `tools/sonda-http/Cargo.lock`. A
+versão de produção é **D-15**, ainda aberta, e o HTML do catcher **não é contrato
+estável entre versões do Salvo**. Status, `Content-Type` e a negociação são
+estáveis; o texto exato precisa ser reconfirmado quando D-15 for respondida —
+basta reexecutar a sonda com a versão certa.
 
 ## D-09 · Manter a distinção entre 401 "ausente" e 401 "inválida"? — **DECIDIDA**
 
@@ -384,20 +433,21 @@ comunicação aos clientes.
 
 ---
 
-## D-10 · Qual o `Content-Type` exato de cada resposta?
+## D-10 · Qual o `Content-Type` exato de cada resposta? — **RESOLVIDA**
 
-**Por que importa.** Os testes de contrato de F9 comparam cabeçalho e corpo. A
-inferência é `text/plain; charset=utf-8` para todas as respostas, mas o Salvo
-pode variar conforme o tipo Rust renderizado — `&'static str`, `String`,
-`Text::Plain`.
+**Resolvida na fase F9 por medição.** Todas as respostas do serviço saem com
 
-**Como verificar.** Captura empírica das seis respostas de `ESPECIFICACAO.md`,
-§1.4.3, registrando o cabeçalho `Content-Type` literal de cada uma.
+```
+text/plain; charset=utf-8
+```
 
-**Padrão provisório.** `text/plain; charset=utf-8` para todas, marcado como
-`INFERIDO — confirmar` na especificação até a captura.
+Confirmado pela sonda para as cinco formas de renderização que o legado usa —
+`Text::Plain(&str)` na autenticação, `&String` nas críticas e `&'static str` no
+sucesso, no 422 e no `pong`. A inferência que estava na especificação estava
+**certa**, e agora é medição.
 
----
+As respostas de rota inexistente e método não permitido **não** seguem essa
+regra: são do catcher e negociam conteúdo. Ver **D-08**.
 
 ## D-11 · Corpus de PDFs reais e *dump* de perfis — **BLOQUEANTE**
 
@@ -610,3 +660,38 @@ páginas extraídas"). A decisão de alertar ou rejeitar é de produto.
 **Padrão provisório.** Preservar. Registrar métrica de "documentos com zero
 páginas extraídas" desde F2, sem alterar comportamento — observabilidade não é
 mudança de contrato.
+
+---
+
+## D-20 · O rodapé "salvo" pode sair das páginas de 404 e 405?
+
+**Por que importa.** As respostas de rota inexistente e método não permitido são
+páginas HTML do catcher do Salvo, e o rodapé traz um link para `https://salvo.rs`
+(ver **D-08**). O serviço em Go reproduz a página **byte a byte**, rodapé
+incluído, porque a regra do projeto é preservar corpo de resposta.
+
+O resultado é um serviço em Go anunciando um arcabouço em Rust que ele não usa
+mais. É correto pela regra e estranho na prática.
+
+**Como verificar se alguém depende disso.** Nenhum cliente razoável analisa o
+HTML de um 404. O que pode existir é monitoração que compare o corpo, ou teste de
+aceitação de terceiros. Uma busca nos registros de acesso por 404 e 405
+frequentes, e a origem deles, resolve:
+
+```sql
+-- se houver registro de acesso em banco; caso contrário, no agregador de logs
+SELECT rota, count(*) FROM acesso WHERE status IN (404, 405)
+GROUP BY 1 ORDER BY 2 DESC LIMIT 20;
+```
+
+Volume desprezível e nenhuma origem automatizada significa que o corpo não é
+contrato de ninguém.
+
+**Padrão provisório.** **Reproduzir byte a byte**, como está. Trocar o rodapé é
+alteração de corpo de resposta e precisa de decisão explícita.
+
+**Encaminhamento.** Se a resposta for "pode sair", a troca é de uma constante em
+`internal/adapter/httpapi/catcher.go` e de dois literais no oráculo de teste.
+Convém decidir junto com **D-15**: se a versão de produção do Salvo tiver outro
+HTML, o byte a byte atual está errado de qualquer forma e as duas coisas se
+resolvem na mesma passada.

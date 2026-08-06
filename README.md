@@ -16,7 +16,7 @@ atrás de chave de configuração desligada por padrão.
 | `docs/MAPA-DE-CHAMADAS.md` | Grafo de chamadas do legado e achados estruturais |
 | `docs/CONTEXT.md` | Memória do projeto entre fases — decisões, desvios, pendências |
 | `reference/main.rs` | Implementação Rust de referência (normativa) |
-| `tools/` | Ferramental de apoio: captura de corpus e geração de corpus sintético |
+| `tools/` | Ferramental de apoio: captura de corpus, corpus sintético e sondas do comportamento do legado |
 | `test/testdata/corpus/` | Documentos de entrada |
 | `test/testdata/expected/` | Saídas capturadas do legado — oráculo de paridade |
 
@@ -33,7 +33,7 @@ atrás de chave de configuração desligada por padrão.
 | F6 | Normalização e tokenização | **concluída** — 1M casos sem divergência |
 | F7 | Índice e busca | **concluída** — 1.378 combinações + 500 mil casos de propriedade |
 | F8 | Pipeline e máquina de estados | **concluída** — sequência de chamadas fixada, 98,4% de cobertura |
-| F9 | Camada HTTP | pendente |
+| F9 | Camada HTTP | **concluída** — contrato byte a byte; D-07, D-08 e D-10 resolvidas por medição |
 | F10 | Ciclo de vida e drenagem | pendente |
 | F11 | Evoluções técnicas atrás de chaves | pendente |
 | F12 | Paridade e execução em sombra | pendente |

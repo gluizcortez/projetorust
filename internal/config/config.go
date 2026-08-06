@@ -38,6 +38,19 @@ type Config struct {
 	DatabaseURL URLSegredo
 	APIKey      Segredo
 
+	// --- tempos limite do servidor HTTP ---
+	//
+	// O legado não define nenhum: usa os padrões do Salvo/hyper. Os de LEITURA
+	// e ESCRITA nascem em ZERO — sem limite — porque qualquer valor finito
+	// cortaria o envio de um diário grande por enlace lento, que é mudança de
+	// comportamento observável. Fechá-los depende de saber o tamanho máximo
+	// real dos documentos, que é a decisão aberta D-04.
+	HTTPTempoLimiteDeCabecalho time.Duration
+	HTTPTempoLimiteDeLeitura   time.Duration
+	HTTPTempoLimiteDeEscrita   time.Duration
+	HTTPTempoLimiteOcioso      time.Duration
+	HTTPMaxHeaderBytes         int
+
 	// --- observabilidade ---
 	LogNivel     slog.Level
 	LogFormato   string
@@ -79,6 +92,11 @@ func (c Config) LogValue() slog.Value {
 		slog.Bool("otel_ativo", c.OTLPEndpoint != ""),
 		slog.Group("chaves",
 			slog.Bool("config_estrita", c.ConfigEstrita),
+			slog.Duration("http_tempo_limite_cabecalho", c.HTTPTempoLimiteDeCabecalho),
+			slog.Duration("http_tempo_limite_leitura", c.HTTPTempoLimiteDeLeitura),
+			slog.Duration("http_tempo_limite_escrita", c.HTTPTempoLimiteDeEscrita),
+			slog.Duration("http_tempo_limite_ocioso", c.HTTPTempoLimiteOcioso),
+			slog.Int("http_max_header_bytes", c.HTTPMaxHeaderBytes),
 			slog.Int64("max_upload_bytes", c.MaxUploadBytes),
 			slog.Int("max_importacoes_concorrentes", c.MaxImportacoesConcorrentes),
 			slog.Int64("index_memoria_bytes", c.IndexMemoriaBytes),
@@ -105,6 +123,11 @@ func (c Config) String() string {
 	b.WriteString(", log=" + c.LogNivel.String() + "/" + c.LogFormato)
 	fmt.Fprintf(&b, ", otel_ativo=%t", c.OTLPEndpoint != "")
 	fmt.Fprintf(&b, ", config_estrita=%t", c.ConfigEstrita)
+	fmt.Fprintf(&b, ", http_tempo_limite_cabecalho=%s", c.HTTPTempoLimiteDeCabecalho)
+	fmt.Fprintf(&b, ", http_tempo_limite_leitura=%s", c.HTTPTempoLimiteDeLeitura)
+	fmt.Fprintf(&b, ", http_tempo_limite_escrita=%s", c.HTTPTempoLimiteDeEscrita)
+	fmt.Fprintf(&b, ", http_tempo_limite_ocioso=%s", c.HTTPTempoLimiteOcioso)
+	fmt.Fprintf(&b, ", http_max_header_bytes=%d", c.HTTPMaxHeaderBytes)
 	fmt.Fprintf(&b, ", max_upload_bytes=%d", c.MaxUploadBytes)
 	fmt.Fprintf(&b, ", max_importacoes_concorrentes=%d", c.MaxImportacoesConcorrentes)
 	fmt.Fprintf(&b, ", index_memoria_bytes=%d", c.IndexMemoriaBytes)
@@ -178,6 +201,12 @@ func Carregar(ctx context.Context) (*Config, error) {
 	cfg.OTLPEndpoint = l.texto("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
 	// --- chaves de recurso: padrão reproduz o legado ---
+	cfg.HTTPTempoLimiteDeCabecalho = l.duracao("HTTP_TEMPO_LIMITE_CABECALHO", 10*time.Second)
+	cfg.HTTPTempoLimiteDeLeitura = l.duracao("HTTP_TEMPO_LIMITE_LEITURA", 0)
+	cfg.HTTPTempoLimiteDeEscrita = l.duracao("HTTP_TEMPO_LIMITE_ESCRITA", 0)
+	cfg.HTTPTempoLimiteOcioso = l.duracao("HTTP_TEMPO_LIMITE_OCIOSO", 120*time.Second)
+	cfg.HTTPMaxHeaderBytes = l.inteiro("HTTP_MAX_HEADER_BYTES", 1<<20)
+
 	cfg.MaxUploadBytes = l.inteiro64("MAX_UPLOAD_BYTES", 0)
 	cfg.MaxImportacoesConcorrentes = l.inteiro("MAX_IMPORTACOES_CONCORRENTES", 0)
 	cfg.IndexMemoriaBytes = l.inteiro64("INDEX_MEMORIA_BYTES", IndexMemoriaBytesPadrao)

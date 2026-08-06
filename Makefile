@@ -16,7 +16,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration sonda-http oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
 ci: guarda-toolchain tidy-check lint test build
@@ -57,6 +57,12 @@ pg-descer:
 ##   mensagem explicativa em vez de falharem.
 test-integration: pg-subir
 	go test ./... -race -tags=integration -run 'Integration|Integracao' -v
+
+## sonda-http: mede o contrato HTTP do legado reconstruindo o roteador do Salvo
+##   Resolveu D-07, D-08 e D-10. Reexecutar quando a versão do Salvo de
+##   produção for conhecida (D-15).
+sonda-http:
+	cargo run --release --manifest-path tools/sonda-http/Cargo.toml
 
 ## oraculos: compila os binários em Rust que os testes de propriedade consultam
 ##   São OPCIONAIS: sem eles os testes de propriedade são pulados com mensagem
