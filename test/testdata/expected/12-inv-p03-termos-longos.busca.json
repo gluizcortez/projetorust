@@ -1,0 +1,343 @@
+{
+  "documento": "12-inv-p03-termos-longos",
+  "sha256_pdf": "dfcfef953b3f95d0c4526067128639eb95767928c1f4acebb8dd553ecb0d7cde",
+  "total_paginas": 1,
+  "paginas_sha256": [
+    "cee51cac9c345a537f879a4fe7d9c072bcb9ba1e8d0d59673174f56a9da72903"
+  ],
+  "buscas": [
+    {
+      "expressao": "ALFA CONSTRUCOES",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "BETA CONSTRUCOES",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "JOAO SILVA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "SOREN KIERKEGAARD",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "STRASSE HANDELS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "CONCEICAO SOUZA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "CONCEIÇÃO SOUZA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "---",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACAO JUDICIAL",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "CONTINUACAO DO PROCESSO",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "INSTITUICAO DO COMITE",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "desfecho": "ok",
+      "paginas": [
+        1
+      ],
+      "texto_sha256": [
+        "cee51cac9c345a537f879a4fe7d9c072bcb9ba1e8d0d59673174f56a9da72903"
+      ]
+    },
+    {
+      "expressao": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "JOAO",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "SILVA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "SILVA JOAO",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "JOAO SILVA LTDA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "JOAOSILVA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ALFA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ALFA CONSTRUCOES LTDA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "CONSTRUCOES ALFA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "DIARIO OFICIAL",
+      "desfecho": "ok",
+      "paginas": [
+        1
+      ],
+      "texto_sha256": [
+        "cee51cac9c345a537f879a4fe7d9c072bcb9ba1e8d0d59673174f56a9da72903"
+      ]
+    },
+    {
+      "expressao": "DIARIO OFICIAL DO MUNICIPIO",
+      "desfecho": "ok",
+      "paginas": [
+        1
+      ],
+      "texto_sha256": [
+        "cee51cac9c345a537f879a4fe7d9c072bcb9ba1e8d0d59673174f56a9da72903"
+      ]
+    },
+    {
+      "expressao": "OFICIAL DIARIO",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME&FILHOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME  &  FILHOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS LTDA",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "FILHOS & ACME",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME &",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "& FILHOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "&",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS (",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS [",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS \\",
+      "desfecho": "erro",
+      "detalhe_do_erro": "Syntax Error: \"ACME & FILHOS \\\"",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "* & FILHOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FILHOS # comentario",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & FIL#HOS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME & [FI LHOS]",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ZZZ & YYY",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "\"ASPAS\"",
+      "desfecho": "erro",
+      "detalhe_do_erro": "Syntax Error: \"\"ASPAS\"\"",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "ACME \" FILHOS",
+      "desfecho": "erro",
+      "detalhe_do_erro": "Syntax Error: \"ACME \" FILHOS\"",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "###",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "   ",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": ".,;:!?",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "SØREN KIERKEGAARD",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "STRAßE HANDELS",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "M2",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "M²",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "PAGINA 1",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    },
+    {
+      "expressao": "PAGINA 2",
+      "desfecho": "ok",
+      "paginas": [],
+      "texto_sha256": []
+    }
+  ]
+}

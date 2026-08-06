@@ -14,7 +14,7 @@ use tantivy::schema::Value;
 use tantivy::schema::{Schema, STORED, TEXT};
 use tantivy::{Index, TantivyDocument};
 
-use crate::modelo::Recorte;
+use crate::modelo::{BuscaCapturada, Recorte};
 
 /// Reproduz `reference/main.rs:510-515` e `365-370`.
 ///
@@ -72,6 +72,78 @@ pub fn tokenizar_paginas(idx: &Index, paginas: &[String]) -> Result<Vec<Vec<Stri
     }
 
     Ok(por_pagina)
+}
+
+/// Captura o resultado CRU de `recortar` para cada expressão, sem passar pelo
+/// laço de deduplicação. Oráculo da fase F7.
+///
+/// As expressões são consultadas de forma INDEPENDENTE: uma que falha não
+/// interrompe as seguintes, ao contrário do laço real (`main.rs:318-322`), que
+/// aborta a importação. Isso é deliberado — aqui o objetivo é medir a busca,
+/// não a máquina de estados, que é o que `recortes.json` já mede.
+pub fn capturar_buscas(idx: &Index, expressoes: &[String]) -> Result<Vec<BuscaCapturada>> {
+    let mut saida = vec![];
+
+    // O filtro do operador `&` do legado faz `.unwrap()` numa expressão regular
+    // montada a partir de dado do banco (`main.rs:395`): expressão inválida
+    // ENTRA EM PÂNICO. Capturar o pânico em vez de morrer é o que permite ao
+    // oráculo registrar esse terceiro desfecho — que é justamente o que
+    // docs/DECISOES-ABERTAS.md, D-19, precisa decidir.
+    //
+    // O gancho é silenciado durante a captura para não poluir a saída com
+    // rastros de pilha esperados, e restaurado logo depois.
+    let gancho = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    for expressao in expressoes {
+        let resultado = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recortar(idx, expressao)
+        }));
+
+        saida.push(match resultado {
+            Ok(Ok(mut recortes)) => {
+                recortes.sort_by(|a, b| a.page.cmp(&b.page));
+                BuscaCapturada {
+                    expressao: expressao.clone(),
+                    desfecho: "ok",
+                    detalhe_do_erro: None,
+                    paginas: recortes.iter().map(|r| r.page).collect(),
+                    texto_sha256: recortes
+                        .iter()
+                        .map(|r| crate::sha256_hex(r.highlight.as_bytes()))
+                        .collect(),
+                }
+            }
+            Ok(Err(e)) => BuscaCapturada {
+                expressao: expressao.clone(),
+                desfecho: "erro",
+                detalhe_do_erro: Some(format!("{e:#}")),
+                paginas: vec![],
+                texto_sha256: vec![],
+            },
+            Err(p) => BuscaCapturada {
+                expressao: expressao.clone(),
+                desfecho: "panico",
+                detalhe_do_erro: Some(descrever_panico(&p)),
+                paginas: vec![],
+                texto_sha256: vec![],
+            },
+        });
+    }
+
+    std::panic::set_hook(gancho);
+
+    Ok(saida)
+}
+
+fn descrever_panico(p: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "pânico sem mensagem recuperável".to_string()
+    }
 }
 
 /// Porte VERBATIM de `reference/main.rs:361-410`.

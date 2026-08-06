@@ -34,6 +34,7 @@
 | INV-P20 | PDF truncado conclui com sucesso e zero recortes | F5 | Alta |
 | INV-P21 | Análise de data do chrono é mais permissiva que a do Go | F3 | Crítica |
 | INV-P22 | Classe de caracteres do Rust diverge da do Go nos dois sentidos | F6 | Crítica |
+| INV-P23 | O filtro do operador `&` só é compilado se houver acerto de frase | F7 | Alta |
 
 ---
 
@@ -85,6 +86,68 @@ recortes exatamente nas expressões corporativas, que são as que mais usam `&`.
 **Verificação.** O teste deve falhar se a função de pré-processamento for
 removida. Um teste que só exercite `ACME & FILHOS` contra `ACME & FILHOS`
 passa nas duas implementações e **não** serve.
+
+### As regras exatas do modo `x`, medidas na fase F7
+
+O comportamento foi **medido**, não deduzido da documentação do *crate*:
+`tools/capturar-corpus/src/bin/sonda-extended.rs` compara o `Hir` de `(?imx)X`
+com o de `(?im)Y` — dois padrões com o mesmo `Hir` são o mesmo autômato.
+
+1. **Espaço em branco é descartado.** O conjunto é exatamente as **25 runas** da
+   propriedade Unicode `White_Space`, o mesmo que o `\s` do Rust aceita —
+   verificado runa a runa em todo o Unicode, e os dois conjuntos coincidem.
+   Inclui `\v`, `NBSP`, `U+1680`, `U+2000`–`U+200A`, `U+2028`, `U+2029`,
+   `U+202F`, `U+205F` e `U+3000`. **Não** inclui o espaço de largura zero
+   `U+200B`.
+2. **`#` inicia comentário** até o próximo `\n` — apenas `\n`, nunca `\r` — ou
+   até o fim do padrão.
+3. **`\` escapa a runa seguinte**, que sobrevive: `\ ` é espaço literal e `\#` é
+   `#` literal. A barra dupla `\\` é barra literal, e o `#` seguinte **volta** a
+   iniciar comentário.
+
+### Duas correções à especificação da fase
+
+O enunciado de F7 afirmava que o modo `x` **preserva** espaços dentro de classes
+de caracteres `[...]`, como fazem o PCRE e o Python. A medição **refuta as duas
+metades** no motor do Rust:
+
+| Padrão | Resultado medido |
+|---|---|
+| `(?imx)[a b]` | ≡ `(?im)[ab]` — o espaço **é** descartado dentro da classe |
+| `(?imx)[a # b]` | **erro de sintaxe**: `unclosed character class` |
+
+O `#` também inicia comentário dentro da classe, e o comentário engole o `]` que
+a fecharia. **O Rust é o oráculo: a especificação foi corrigida.** A
+consequência prática é boa — `StripExtended` não precisa rastrear classes de
+caracteres, o que elimina toda uma família de erros de borda.
+
+### O `\s` injetado também diverge
+
+A substituição `key.replace('&', r"\s*&\s*")` injeta um `\s` que **não pode ser
+traduzido por `\s`**:
+
+| Motor | `\s` |
+|---|---|
+| *crate* `regex` | as 25 runas de `White_Space` |
+| RE2 do Go | `[\t\n\f\r ]` — cinco runas, **sem sequer o `\v`** |
+
+Um `&` cercado de espaço não quebrável, espaço ideográfico ou tabulação vertical
+— todos possíveis na saída do MuPDF (INV-P10) — casa hoje e deixaria de casar. A
+tradução usa a classe explícita `intervalosDeEspacoDoRust`, verificada runa a
+runa contra o `\s` do Rust em todo o Unicode.
+
+### Divergências residuais, conhecidas e limitadas
+
+`StripExtended` é uma transformação **léxica** sobre a cadeia inteira; no Rust o
+descarte acontece **durante** a análise sintática. As construções em que isso é
+observável, mais as que o RE2 simplesmente não tem, estão em `DECISOES-ABERTAS.md`,
+**D-06**. Todas **falham alto** — o padrão é recusado e a importação não conclui.
+Nenhuma é alcançável por uma expressão de perfil que não contenha sintaxe de
+expressão regular.
+
+**Medição.** 250.000 pares expressão/texto no espaço realista (razão social com
+`&`): **zero divergências**. 250.000 no espaço adversarial: **zero divergências
+de resultado** — só divergências de aceitação, que são ruidosas.
 
 ---
 
@@ -916,3 +979,51 @@ apontaram direto para as duas causas.
 É a justificativa concreta para o teste de propriedade ser critério de aceite
 da fase, e não opcional: nenhum corpus realista contém `¼-\n` nem `6̧-\n` em
 volume suficiente para que a falha apareça.
+
+---
+
+## INV-P23 — O filtro do operador `&` só é compilado se houver acerto de frase
+
+**Descrição.** A expressão regular do filtro é compilada **dentro do laço sobre
+os resultados**, não antes dele. Uma expressão que contém `&` e cuja sintaxe é
+inválida só chega a ser compilada se a busca de frase produzir **pelo menos um
+acerto**. Sem acerto, o `.unwrap()` nunca roda e a importação segue normalmente.
+
+**Origem.** `main.rs:386–398` — o `if key.contains('&')` está **dentro** do
+`for (_score, doc_address) in top_docs`.
+
+```rust
+for (_score, doc_address) in top_docs {
+    // ...
+    if key.contains('&') {
+        let exp = format!("(?imx){}", key.replace('&', r"\s*&\s*"));
+        let re = regex::Regex::new(&exp).unwrap();   // ← só aqui
+```
+
+**Evidência empírica.** A captura do corpus da fase F7 registra o desfecho de
+cada expressão por documento. A expressão `ACME & FILHOS (` — sintaxe inválida —
+foi consultada contra os 26 documentos:
+
+| Documento | Páginas de `ACME FILHOS` | Desfecho no legado |
+|---|---|---|
+| `08-inv-p01-e-comercial` | `[1, 2, 3]` | **pânico** |
+| `23-f5-caracteres-de-marcacao` | `[1]` | **pânico** |
+| `25-f5-mesma-linha-varios-desenhos` | `[1]` | **pânico** |
+| os outros 23 documentos | `[]` | `ok`, zero recortes |
+
+A correlação é exata: **pânico se e somente se houve acerto**.
+
+**Caso positivo.** Expressão `acme & filhos (` contra um documento sem a frase
+→ zero recortes, **sem erro**.
+
+**Caso negativo.** A mesma expressão contra um documento **com** a frase →
+`ErrExpressaoInvalida`.
+
+**Como um porte ingênuo quebraria.** Compilar o filtro logo após tokenizar a
+expressão — o que é a ordem natural em Go — transformaria 23 importações
+bem-sucedidas em 23 falhas. O harness de paridade da fase F7 mede isso: a
+sabotagem que antecipa a compilação produz **69 combinações divergentes de
+1.378**.
+
+**Verificação.** `TestFiltroDoOperadorSoRodaComAcerto`, e o campo `desfecho` de
+`test/testdata/expected/*.busca.json`.

@@ -17,8 +17,8 @@
 | D-02 | Qual o `COLLATE` do banco? | F4, F8 | aberta | operação |
 | D-03 | Quais as versões exatas de `tantivy`, `mupdf` e `diacritics`? | **F6, F7** | parcial · limite **medido** | quem mantém o Rust |
 | D-04 | Qual o maior PDF e o maior número de recortes já processados? | F11, F12 | aberta | operação |
-| D-05 | Existem expressões com `"` cadastradas? | F7 | aberta | operação |
-| D-06 | O que fazer com padrão de `&` que não compila? | F7 | aberta | arquitetura |
+| D-05 | Existem expressões com `"` cadastradas? | F7, F8 | aberta · **efeito medido** | operação |
+| D-06 | O que fazer com padrão de `&` que não compila? | F8 | aberta · **ampliada em F7** | arquitetura |
 | D-07 | Reproduzir ou remover o ramo morto de `main.rs:226–230`? | F9 | aberta | arquitetura |
 | D-08 | Qual a resposta para rota inexistente e método não permitido? | F9 | aberta | captura empírica |
 | D-09 | Manter a distinção entre 401 "ausente" e 401 "inválida"? | F9 | **decidida** | arquitetura |
@@ -177,6 +177,25 @@ suspeitas.
 consulta revelar ocorrências em produção, abrir item de produto — não corrigir
 dentro da migração.
 
+### O que a fase F7 mediu
+
+A falha do legado é do **analisador de consulta** do Tantivy: `main.rs:375` monta
+a consulta por interpolação sem escape, `format!(r#""{key}""#)`, e a aspa
+desbalanceia as aspas externas. A captura registrou **78 combinações** de
+desfecho `erro` no corpus — todas de expressões com `"` ou com `\` final.
+
+**A busca em Go não tem analisador de consulta.** A expressão é tokenizada pelo
+mesmo caminho do texto, e a aspa é apenas mais um separador: não existe erro a
+devolver. Das 78, **75 são bem definidas em Go** e **3 falham por outro motivo**
+— `ACME & FILHOS \` também tem `&` e barra invertida final, e o filtro do
+operador a recusa.
+
+**Consequência para a decisão.** Reproduzir INV-P17 exige um teste explícito de
+aspas **antes** da busca, no caso de uso — não no índice. É trabalho de F8, e
+depende desta pergunta: se nenhuma expressão de produção tem `"`, o teste é
+código morto e não deve ser escrito. `TestINVP17AspasNaoAbortamABusca` fixa o
+comportamento atual para que a escolha seja consciente.
+
 ---
 
 ## D-06 · O que fazer com padrão de `&` que não compila?
@@ -207,6 +226,63 @@ presa no status `3`. Implementar como erro tipado que interrompe a tarefa **sem*
 gravar `-1`, com registro em log de nível erro. Documentar como
 `DEFEITO PRESERVADO` e propor a normalização para `-1` como evolução em F11,
 atrás de chave.
+
+### Ampliação na fase F7 — o que ficou medido
+
+A fase F7 confirmou a análise acima e acrescentou três coisas.
+
+**1. O pânico é real e foi capturado.** `tools/capturar-corpus` agora envolve
+`recortar` em `catch_unwind` e registra três desfechos por expressão — `ok`,
+`erro` e `panico` — em `test/testdata/expected/*.busca.json`. Sobre o corpus
+sintético, **9 pânicos** em 1.378 combinações, todos com expressões contendo `&`
+e sintaxe inválida.
+
+**2. O pânico é condicional ao acerto** (INV-P23). A expressão só é compilada
+dentro do laço sobre os resultados, então a mesma expressão inválida é inofensiva
+em 23 dos 26 documentos. Qualquer normalização precisa preservar isso, ou
+transformará importações hoje bem-sucedidas em falhas.
+
+**3. O conjunto de padrões recusados é MAIOR em Go do que em Rust.** O `.unwrap()`
+não é a única fonte de recusa: o RE2 é um analisador sintático diferente do
+*crate* `regex`. A fase F7 mediu 250.000 expressões adversariais e classificou:
+
+| Classe | Motivo | Comportamento em Go |
+|---|---|---|
+| `(?-x)`, `(?x)` | a flag `x` não existe no RE2 | recusa na compilação |
+| `\w`, `\W`, `\b`, `\B` | o `\w` do Rust é `[\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\p{Join_Control}]`; `Alphabetic` e `Join_Control` são propriedades derivadas que o `\p{...}` do RE2 não expõe | **recusa deliberada** |
+| `[a[bc]]` | classe aninhada: o Rust lê união de conjuntos, o RE2 lê `[` literal — os dois compilam e produzem autômatos **diferentes** | **recusa deliberada** |
+| `\s*{2}` e afins | o RE2 recusa repetição aninhada que o Rust aceita | recusa na compilação |
+
+As duas linhas marcadas **recusa deliberada** são escolha de engenharia desta
+fase: traduzir por aproximação criaria divergência **silenciosa** — recorte
+errado gravado sem que ninguém perceba —, e recusar troca isso por falha
+**alta**, no mesmo regime em que o RE2 já recusa `(?-x)`.
+
+**Conserto exato, se alguma expressão real precisar.** `\w` e `\W` são
+exprimíveis em RE2 por uma classe explícita de intervalos, gerada perguntando ao
+próprio motor do Rust — é a mesma técnica já usada três vezes no projeto
+(`palavra_table.go`, `alfanumerico_table.go`, `diacriticos_table.go`). `\b` e
+`\B` **não** têm conserto: usam o `\w` interno do motor, que no RE2 é ASCII e
+não é configurável. Classe aninhada exigiria um analisador de classes com
+álgebra de conjuntos para achatar os intervalos.
+
+**O que decidir, e o custo de não decidir.** A pergunta continua sendo a de
+sempre — reproduzir o estado preso em `3` ou normalizar para `-1`. O que mudou é
+que ela agora **bloqueia F8**, não F7: a busca devolve `ErrExpressaoInvalida` e
+quem escolhe o status é a máquina de estados. Enquanto não houver resposta, F8
+adota o padrão provisório acima.
+
+**Como reduzir o risco a zero sem decidir.** As quatro classes só são alcançáveis
+por expressões que contenham sintaxe de expressão regular. Uma consulta resolve:
+
+```sql
+SELECT DISTINCT expressao_nm
+FROM recorte.tb_perfil_variacao
+WHERE expressao_nm ~ '[\\[\\](){}*+?|^$]|\\\\'
+ORDER BY 1;
+```
+Resultado vazio significa que nenhuma das divergências residuais é alcançável em
+produção, e D-06 deixa de ser risco para virar nota de rodapé.
 
 ---
 

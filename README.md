@@ -11,7 +11,7 @@ atrás de chave de configuração desligada por padrão.
 |---|---|
 | `docs/roadmap-migracao-rust-go.html` | Documento de arquitetura: análise do legado, armadilhas de paridade, arquitetura alvo e as 14 fases com seus prompts |
 | `docs/ESPECIFICACAO.md` | Especificação normativa do comportamento observável |
-| `docs/INVARIANTES.md` | As 20 invariantes de paridade, com casos positivos e negativos |
+| `docs/INVARIANTES.md` | As 23 invariantes de paridade, com casos positivos e negativos |
 | `docs/DECISOES-ABERTAS.md` | Perguntas pendentes, com padrão provisório e responsável |
 | `docs/MAPA-DE-CHAMADAS.md` | Grafo de chamadas do legado e achados estruturais |
 | `docs/CONTEXT.md` | Memória do projeto entre fases — decisões, desvios, pendências |
@@ -31,7 +31,7 @@ atrás de chave de configuração desligada por padrão.
 | F4 | Persistência | **concluída** |
 | F5 | Extração de texto do PDF | **concluída** — 159/159 páginas idênticas |
 | F6 | Normalização e tokenização | **concluída** — 1M casos sem divergência |
-| F7 | Índice e busca | pendente |
+| F7 | Índice e busca | **concluída** — 1.378 combinações + 500 mil casos de propriedade |
 | F8 | Pipeline e máquina de estados | pendente |
 | F9 | Camada HTTP | pendente |
 | F10 | Ciclo de vida e drenagem | pendente |

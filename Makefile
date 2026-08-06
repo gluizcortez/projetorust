@@ -16,7 +16,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration parity build docker generate tidy tidy-check cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
 ci: guarda-toolchain tidy-check lint test build
@@ -58,13 +58,23 @@ pg-descer:
 test-integration: pg-subir
 	go test ./... -race -tags=integration -run 'Integration|Integracao' -v
 
+## oraculos: compila os binários em Rust que os testes de propriedade consultam
+##   São OPCIONAIS: sem eles os testes de propriedade são pulados com mensagem
+##   explicativa, e os testes contra o corpus dourado seguem rodando.
+oraculos:
+	cargo build --release --manifest-path tools/capturar-corpus/Cargo.toml \
+		--bin capturar-corpus --bin oraculo-normalizacao --bin oraculo-extended
+
+## corpus: regenera o corpus sintético e recaptura o comportamento do legado
+corpus:
+	python3 tools/gerar-corpus-sintetico/gerar.py test/testdata/corpus
+	cargo run --release --manifest-path tools/capturar-corpus/Cargo.toml \
+		--bin capturar-corpus -- test/testdata/corpus test/testdata/expected
+
 ## parity: comparação contra o corpus dourado capturado do legado
 parity:
 	@if [ ! -d test/testdata/expected ]; then \
-		echo "corpus ausente. Gere com:"; \
-		echo "  python3 tools/gerar-corpus-sintetico/gerar.py test/testdata/corpus"; \
-		echo "  cargo run --release --manifest-path tools/capturar-corpus/Cargo.toml -- \\"; \
-		echo "      test/testdata/corpus test/testdata/expected"; \
+		echo "corpus ausente. Gere com:  make corpus"; \
 		exit 1; \
 	fi
 	go test ./test/parity/... -v

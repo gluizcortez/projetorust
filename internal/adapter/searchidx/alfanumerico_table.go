@@ -5,7 +5,6 @@
 //	cargo build --release --manifest-path tools/gerar-tabela-diacriticos/dump/Cargo.toml
 //	tools/gerar-tabela-diacriticos/dump/target/release/dump-unicode > /tmp/unicode.tsv
 //	go run ./tools/gerar-tabela-diacriticos /tmp/unicode.tsv
-//
 package searchidx
 
 // excecoesAlfanumericas são as runas em que `char::is_alphanumeric` do Rust,

@@ -86,3 +86,52 @@ pub struct SaidaTokens {
     pub total_paginas: usize,
     pub termos_por_pagina: Vec<Vec<String>>,
 }
+
+/// Resultado CRU de `recortar` para UMA expressão — antes de qualquer
+/// ordenação, deduplicação ou gravação.
+///
+/// É o oráculo da fase F7. O `recortes.json` não serve para isso: ele já passou
+/// pela deduplicação por perfil (INV-P12), que remove páginas que a busca
+/// devolveu, e por isso mede F7 e F8 juntas. Aqui cada expressão é medida
+/// isoladamente, como `recortar` a devolve.
+#[derive(Debug, Clone, Serialize)]
+pub struct BuscaCapturada {
+    pub expressao: String,
+    /// Como `recortar` terminou. São TRÊS desfechos observáveis, não dois:
+    ///
+    /// | valor | causa | efeito no legado |
+    /// |---|---|---|
+    /// | `ok` | devolveu `Ok` | segue o laço |
+    /// | `erro` | devolveu `Err` | status -1 e a importação encerra (INV-P17) |
+    /// | `panico` | `.unwrap()` na expressão regular do filtro `&` | a tarefa MORRE e o status fica preso em 3 (D-19) |
+    ///
+    /// O `panico` só acontece quando a busca de frase produziu ao menos um
+    /// acerto, porque só aí o legado chega a compilar a expressão regular
+    /// (`main.rs:392-398`). É a evidência empírica de INV-P23.
+    pub desfecho: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detalhe_do_erro: Option<String>,
+    /// Páginas devolvidas, ORDENADAS de forma crescente e sem repetição.
+    ///
+    /// A captura ordena de propósito. O Tantivy devolve na ordem do `TopDocs`,
+    /// que é por pontuação — e a pontuação é IGNORADA pelo legado, que ordena
+    /// por página logo em seguida (`main.rs:285`). Como uma página nunca
+    /// aparece duas vezes, as duas ordens convergem para a mesma sequência, e
+    /// ordenar aqui torna o arquivo determinístico.
+    pub paginas: Vec<u64>,
+    /// SHA-256 do `highlight` de cada página, na mesma ordem de `paginas`.
+    /// Prova que o recorte carrega o texto INTEGRAL da página, não um trecho.
+    pub texto_sha256: Vec<String>,
+}
+
+/// Arquivo `<nome>.busca.json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SaidaBuscas {
+    pub documento: String,
+    pub sha256_pdf: String,
+    pub total_paginas: usize,
+    /// SHA-256 do texto normalizado de cada página, índice 0 = página 1.
+    /// Permite ao teste em Go confirmar que indexou o mesmo texto.
+    pub paginas_sha256: Vec<String>,
+    pub buscas: Vec<BuscaCapturada>,
+}

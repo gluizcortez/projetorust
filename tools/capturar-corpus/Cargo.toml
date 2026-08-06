@@ -32,6 +32,10 @@ tantivy = "0.22"
 mupdf = "0.4"
 diacritics = "0.2"
 regex = "1"
+# Usada apenas pelos binários de sondagem e oráculo do modo `x` (fase F7).
+# É a mesma crate que o `regex` acima já traz transitivamente — fixá-la aqui
+# não muda a resolução, apenas torna a API acessível ao código da ferramenta.
+regex-syntax = "0.8"
 sha2 = "0.10"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }

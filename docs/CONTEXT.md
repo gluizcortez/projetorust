@@ -995,3 +995,171 @@ go test -bench=Tokenizar                       53,3 MB/s
 | Dependência | Justificativa |
 |---|---|
 | `golang.org/x/text` | `norm.NFD`/`NFC` e `runes.Remove` para a decomposição canônica. Era dependência indireta; passou a direta. |
+
+---
+
+## F7 — Índice em memória e busca de frase
+
+**Entregue.** `internal/adapter/searchidx` passou a satisfazer `domain.Indexador`
+e `domain.Indice`: índice posicional em memória, busca de frase por interseção
+de posições e o filtro do operador `&` com cache. O Tantivy saiu do caminho de
+execução — continua existindo apenas dentro de `tools/capturar-corpus`, como
+oráculo.
+
+| Arquivo | Conteúdo |
+|---|---|
+| `internal/adapter/searchidx/indice.go` | `Indexador`, `indice`, `Frase`, interseção posicional |
+| `internal/adapter/searchidx/extended.go` | `StripExtended` — a flag `x` do *crate* `regex` |
+| `internal/adapter/searchidx/filtro.go` | `CompilarFiltro`, tradução de classes Perl, cache |
+| `tools/capturar-corpus/src/bin/sonda-extended.rs` | sonda exploratória do modo `x` |
+| `tools/capturar-corpus/src/bin/oraculo-extended.rs` | oráculo do filtro `&` para o teste de propriedade |
+| `test/parity/busca_test.go` | harness contra `*.busca.json` |
+| `test/parity/filtro_test.go` | dois testes de propriedade, 500.000 casos |
+
+### O oráculo que faltava
+
+`recortes.json` **não serve** para medir F7: ele já passou pela deduplicação por
+perfil (INV-P12), que remove páginas que a busca devolveu, e portanto mede F7 e
+F8 juntas. `capturar-corpus` ganhou um quinto arquivo, `<documento>.busca.json`,
+com o resultado **cru** de `recortar` por expressão — 53 expressões × 26
+documentos = **1.378 combinações**.
+
+O arquivo registra **três** desfechos, não dois:
+
+| Desfecho | Causa | Efeito no legado | Ocorrências |
+|---|---|---|---|
+| `ok` | `Ok(_)` | segue o laço | 1.291 |
+| `erro` | `Err(_)` do analisador de consulta | status −1, importação encerra (INV-P17) | 78 |
+| `panico` | `.unwrap()` na expressão regular do filtro `&` | a tarefa **morre** e o status fica preso em 3 (D-06) | 9 |
+
+Capturar o pânico exigiu `catch_unwind` no ferramental. Valeu a pena: os 9
+pânicos são a evidência empírica de **INV-P23**.
+
+### Decisões
+
+**D-F7-01 — a especificação da fase estava errada sobre classes de caracteres, e
+foi corrigida.** O enunciado afirmava que o modo `x` preserva espaços dentro de
+`[...]`, como PCRE e Python. A medição com `sonda-extended` refuta as duas
+metades: `(?imx)[a b]` ≡ `(?im)[ab]`, e `(?imx)[a # b]` é **erro de sintaxe**,
+porque o comentário engole o `]`. O Rust é o oráculo. A consequência é boa —
+`StripExtended` não rastreia classes de caracteres.
+
+**D-F7-02 — o `\s` injetado é traduzido por classe explícita, não por `\s`.** O
+`\s` do RE2 tem 5 runas; o do Rust tem 25, e a diferença inclui `\v`, `NBSP` e o
+espaço ideográfico, todos possíveis na saída do MuPDF. Traduzir `\s` por `\s`
+faria o filtro perder recortes que hoje existem. A classe está escrita **sem
+nenhum espaço literal**, porque ela mesma atravessa `StripExtended`.
+
+**D-F7-03 — `\S` e `\D` também são traduzidos; `\w`, `\W`, `\b`, `\B` e classe
+aninhada são RECUSADOS.** Aproximar criaria divergência **silenciosa**; recusar
+troca isso por falha **alta**, no mesmo regime em que o RE2 já recusa `(?-x)`.
+Registrado em D-06, com o conserto exato descrito caso alguma expressão real
+precise.
+
+**D-F7-04 — a compilação do filtro é preguiçosa, e isso é paridade, não
+otimização.** No legado a expressão regular é compilada dentro do laço sobre os
+acertos, então uma expressão inválida sem acerto nenhum jamais entra em pânico.
+Antecipar a compilação — a ordem natural em Go — quebra 69 das 1.378
+combinações. É **INV-P23**.
+
+**D-F7-05 — o cache de filtros é otimização pura e não fica atrás de chave.** Não
+muda resultado nenhum: resolve o achado A08, em que o legado recompila a
+expressão uma vez por página que casou. Cresce sem limite de propósito — a chave
+é `expressao_nm`, cujo número de valores distintos é limitado pela tabela.
+
+**D-F7-06 — a ordem do resultado é por página crescente.** O legado devolve na
+ordem do `TopDocs` (por pontuação, que ele ignora) e ordena por página na linha
+seguinte, `main.rs:285`. Como uma página nunca aparece duas vezes, as duas ordens
+convergem para a mesma sequência.
+
+### Um erro que o teste de propriedade pegou, e um que ele quase não pegou
+
+O corpus dourado passou **1.378 de 1.378** com uma implementação que tinha duas
+divergências silenciosas. Quem as encontrou foi o teste de propriedade:
+
+| Rodada | Divergências silenciosas | Causa |
+|---|---|---|
+| 1ª | 13 em 250.000 | `\S` não traduzido — o `\S` do RE2 aceita `NBSP`, `\v` e `U+3000`, o do Rust não |
+| 2ª | 2 em 250.000 | classe aninhada `[a[bc]]` — o Rust lê união, o RE2 lê `[` literal |
+| 3ª | 0 em 250.000 | — |
+
+A segunda correção quase não pegou: o teste unitário `[a[bc]]` **passou**
+indevidamente porque `traduzirClassesPerl` tinha um caminho rápido
+`if !strings.Contains(padrao, "\\")` que pulava a varredura inteira em padrões
+sem barra invertida. As duas divergências que o teste de propriedade viu tinham
+`\S` por acaso. O caso de teste escrito à mão é que expôs o caminho rápido.
+
+**Lição registrada:** um caminho rápido é uma segunda implementação da função, e
+precisa de teste próprio.
+
+### Correção de uma estimativa errada
+
+`estimarTermosDistintos` dimensionava o mapa de ocorrências linearmente nos bytes
+do texto. A medição mostrou superestimativa de **420 vezes** num documento de 500
+páginas — 220.522 posições para 524 termos distintos —, o que sozinho respondia
+por dezenas de megabytes de mapa ocioso.
+
+O erro é **estrutural, não de calibração**: vocabulário cresce de forma sublinear
+no volume de texto (lei de Heaps), então nenhum divisor constante serve.
+
+| Corpus | Texto | Termos | Distintos |
+|---|---|---|---|
+| corpus real da F0 | 24 KB | 3.359 | 330 |
+| 500 páginas sintéticas | 2,6 MB | 423.000 | 524 |
+
+Substituída por capacidade inicial fixa de 4.096, com o crescimento amortizado do
+mapa. Dimensionar de verdade depende de medir vocabulário em diário oficial real
+— **D-11**.
+
+### Medições
+
+```
+go test ./test/parity/ -run TestBuscaFrase       1.378 combinações, zero divergências
+go test -run TestPropriedadeFiltroOperador       250.000 casos realistas, zero divergências
+go test -run TestCaracterizacaoSintaxeDivergente 250.000 adversariais, zero divergências
+                                                 DE RESULTADO
+go test ./internal/adapter/searchidx/ -race -cover        97,6%
+golangci-lint run ./...                                   0 issues
+```
+
+| Medida | Valor | Referência do legado |
+|---|---|---|
+| Memória **retida** pelo índice, 500 páginas / 2,5 MB de texto | **8,1 MB** | escritor de **500 MB** (`main.rs:519`, achado A04) — **1,6%** |
+| Memória movimentada na construção | 43,9 MB | — |
+| Construção do índice, 500 páginas | 61,4 ms | — |
+| `Frase`, termo único | 26,5 µs | — |
+| `Frase`, frase de dois termos | 189 µs | — |
+| `Frase`, com filtro `&` sobre 500 acertos | 57,2 ms | o legado ainda **recompila** a expressão 500 vezes |
+| `CompilarFiltro` sem cache | 7,13 µs | — |
+| `CompilarFiltro` com cache | 21,1 ns | **338× mais rápido** — é o achado A08 |
+
+### Como se provou que o arnês morde
+
+Quatro sabotagens, cada uma revertida em seguida:
+
+| Sabotagem | Detecção |
+|---|---|
+| busca de frase virando `strings.Contains` | 27 combinações divergentes de 1.378 |
+| `StripExtended` virando identidade | 10 combinações; a página 2 de `08-inv-p01-e-comercial` (`ACME&FILHOS`) some |
+| compilação do filtro antecipada | 69 combinações divergentes |
+| `\s` nativo do RE2 no lugar da classe traduzida | `TestCompilarFiltroINVP01` falha em `NBSP`, `\v` e `U+3000` |
+
+### Pendências que entram na F8
+
+1. **D-06** deixou de bloquear F7 e passou a bloquear **F8**: a busca devolve
+   `ErrExpressaoInvalida` e quem escolhe entre status −1 e o travamento em 3 é a
+   máquina de estados.
+2. **D-05** idem: reproduzir INV-P17 exige um teste de aspas **antes** da busca,
+   no caso de uso. Se nenhuma expressão de produção tem `"`, esse teste é código
+   morto e não deve ser escrito.
+3. **D-11** segue bloqueante, agora também para dimensionar o vocabulário.
+4. **D-15** segue bloqueante.
+5. **INV-P10** continua sem exercício (herdado da F5).
+6. As demais de F0: **D-14**, **D-08**, **D-10**, **D-13**.
+
+### Dependências novas
+
+Nenhuma em Go — o índice usa só a biblioteca padrão. No ferramental em Rust,
+`regex-syntax` passou a dependência direta de `tools/capturar-corpus`: já vinha
+transitivamente com `regex`, e fixá-la não muda a resolução, apenas torna a API
+acessível à sonda do modo `x`.

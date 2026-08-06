@@ -126,6 +126,7 @@ dependencies = [
  "hex",
  "mupdf",
  "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "sha2",

@@ -95,6 +95,59 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+  # Os testes de PROPRIEDADE das fases F6 e F7 comparam a implementação Go com
+  # o legado em Rust rodando de verdade, caso a caso. São os testes que
+  # encontraram as divergências que o corpus dourado não pegou — 320.142 na F6,
+  # 13 mais 2 na F7 —, e sem os binários oráculo eles se PULAM em silêncio.
+  #
+  # Ficam em job separado porque compilar o ferramental em Rust custa caro: o
+  # `mupdf-sys` compila o MuPDF do zero. Com o cache do cargo, só a primeira
+  # execução paga.
+  paridade:
+    name: paridade contra o legado em Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache do cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/capturar-corpus/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('tools/capturar-corpus/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Dependências de compilação do MuPDF
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+
+      - name: Compilar os oráculos
+        run: make oraculos
+
+      # Sem -race: estes testes não têm concorrência, e o detector triplicaria o
+      # tempo de um milhão e meio de casos.
+      - name: Testes de paridade e de propriedade
+        run: go test ./test/parity/... -v
+
+      # O corpus dourado é versionado. Se recapturá-lo mudar qualquer arquivo, ou
+      # o ferramental mudou de comportamento ou a captura não é determinística —
+      # as duas coisas invalidam o oráculo.
+      - name: O corpus capturado é reprodutível
+        run: |
+          cargo run --release --manifest-path tools/capturar-corpus/Cargo.toml \
+            --bin capturar-corpus -- test/testdata/corpus test/testdata/expected
+          git diff --exit-code test/testdata/expected
+
   imagem:
     name: imagem de distribuição
     runs-on: ubuntu-latest

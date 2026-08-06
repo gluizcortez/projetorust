@@ -36,4 +36,16 @@ var (
 	// (reference/main.rs:603 e 712). Go converteria em silêncio.
 	// Ver docs/INVARIANTES.md, INV-P15 e INV-P18.
 	ErrEstouroNumerico = errors.New("estouro numérico")
+
+	// ErrExpressaoInvalida indica expressão de perfil que não compila como
+	// filtro do operador `&`.
+	//
+	// ATENÇÃO — não tem equivalente exato no legado. Ali a compilação é
+	// `regex::Regex::new(&exp).unwrap()` (reference/main.rs:395) e uma
+	// expressão inválida ENTRA EM PÂNICO dentro da tarefa do tokio, que morre
+	// SEM atualizar o status: a importação fica presa em 3 para sempre. Um erro
+	// tipado leva a importação a -1, que é um desfecho diferente.
+	// A escolha entre reproduzir o travamento e corrigi-lo é da fase F8 e está
+	// registrada em docs/DECISOES-ABERTAS.md, D-19.
+	ErrExpressaoInvalida = errors.New("expressão de busca inválida")
 )

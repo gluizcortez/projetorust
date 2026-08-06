@@ -1,24 +1,28 @@
 //! `capturar-corpus` — captura o comportamento do serviço legado como corpus
 //! dourado de paridade. Entregável 4 da fase F0.
 //!
-//! Para cada PDF de um diretório, grava quatro arquivos:
+//! Para cada PDF de um diretório, grava cinco arquivos:
 //!
 //! | Arquivo | Conteúdo | Oráculo da fase |
 //! |---|---|---|
 //! | `<nome>.paginas-brutas.json` | texto por página ANTES da normalização | F5 |
 //! | `<nome>.paginas.json` | texto por página DEPOIS da normalização | F6 |
 //! | `<nome>.tokens.json` | termos do índice por página | F6 |
-//! | `<nome>.recortes.json` | recortes na ordem exata de gravação | F7, F8 |
+//! | `<nome>.busca.json` | páginas devolvidas por expressão, ANTES da deduplicação | F7 |
+//! | `<nome>.recortes.json` | recortes na ordem exata de gravação | F8 |
 //!
 //! O binário é DETERMINÍSTICO: duas execuções sobre a mesma entrada produzem
 //! saídas idênticas byte a byte.
 //!
 //! Uso:
-//!     capturar-corpus <dir-corpus> <dir-saida> [--chaves ARQ] [--texto MODO]
+//!     capturar-corpus <dir-corpus> <dir-saida> [--chaves ARQ] [--expressoes ARQ] [--texto MODO]
 //!
 //!     --chaves ARQ    JSON com [{"id_perfil":N,"expressao_nm":"..."}], NA ORDEM
 //!                     produzida por `ORDER BY tp.id_perfil, tpv.expressao_nm`.
 //!                     Padrão: <dir-corpus>/chaves.json
+//!     --expressoes ARQ JSON com ["expressão", ...] a capturar no `.busca.json`
+//!                     ALÉM das de --chaves. Opcional; ausente é aceito.
+//!                     Padrão: <dir-corpus>/expressoes-busca.json
 //!     --texto MODO    `completo` (padrão) grava o texto integral de cada
 //!                     recorte; `sha256` grava apenas o resumo.
 
@@ -32,7 +36,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
-use modelo::{ChavePesquisa, Desfecho, SaidaPaginas, SaidaRecortes, SaidaTokens};
+use modelo::{ChavePesquisa, Desfecho, SaidaBuscas, SaidaPaginas, SaidaRecortes, SaidaTokens};
 
 /// Porte de `reference/main.rs:342-346`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -45,6 +49,11 @@ struct Opcoes {
     dir_corpus: PathBuf,
     dir_saida: PathBuf,
     arquivo_chaves: PathBuf,
+    /// Expressões EXTRA a capturar no `.busca.json`, além das de `chaves.json`.
+    /// Existem para exercitar a busca em casos que o laço de recorte não
+    /// alcança — INV-P17, por exemplo, aborta a importação inteira e não pode
+    /// entrar no `chaves.json` sem destruir o oráculo de F8.
+    arquivo_expressoes: PathBuf,
     incluir_texto: bool,
 }
 
@@ -53,6 +62,7 @@ fn analisar_argumentos() -> Result<Opcoes> {
 
     let mut posicionais = vec![];
     let mut arquivo_chaves: Option<PathBuf> = None;
+    let mut arquivo_expressoes: Option<PathBuf> = None;
     let mut incluir_texto = true;
 
     let mut i = 0;
@@ -62,6 +72,12 @@ fn analisar_argumentos() -> Result<Opcoes> {
                 i += 1;
                 arquivo_chaves = Some(PathBuf::from(
                     args.get(i).context("--chaves exige um caminho")?,
+                ));
+            }
+            "--expressoes" => {
+                i += 1;
+                arquivo_expressoes = Some(PathBuf::from(
+                    args.get(i).context("--expressoes exige um caminho")?,
                 ));
             }
             "--texto" => {
@@ -88,17 +104,21 @@ fn analisar_argumentos() -> Result<Opcoes> {
 
     let dir_corpus = posicionais[0].clone();
     let arquivo_chaves = arquivo_chaves.unwrap_or_else(|| dir_corpus.join("chaves.json"));
+    let arquivo_expressoes =
+        arquivo_expressoes.unwrap_or_else(|| dir_corpus.join("expressoes-busca.json"));
 
     Ok(Opcoes {
         dir_corpus,
         dir_saida: posicionais[1].clone(),
         arquivo_chaves,
+        arquivo_expressoes,
         incluir_texto,
     })
 }
 
 const AJUDA: &str = "\
-capturar-corpus <dir-corpus> <dir-saida> [--chaves ARQ] [--texto completo|sha256]";
+capturar-corpus <dir-corpus> <dir-saida> [--chaves ARQ] [--expressoes ARQ] \
+[--texto completo|sha256]";
 
 fn main() -> Result<()> {
     let op = analisar_argumentos()?;
@@ -113,6 +133,15 @@ fn main() -> Result<()> {
         op.arquivo_chaves.display()
     );
 
+    let extras = carregar_expressoes_extra(&op.arquivo_expressoes)?;
+    let expressoes = expressoes_a_capturar(&chaves, &extras);
+    eprintln!(
+        "expressões a buscar: {} ({} extra de {})",
+        expressoes.len(),
+        extras.len(),
+        op.arquivo_expressoes.display()
+    );
+
     let pdfs = listar_pdfs(&op.dir_corpus)?;
     if pdfs.is_empty() {
         bail!("nenhum PDF encontrado em {}", op.dir_corpus.display());
@@ -121,7 +150,7 @@ fn main() -> Result<()> {
 
     let mut falhas = 0usize;
     for pdf in &pdfs {
-        match capturar(pdf, &chaves, &op) {
+        match capturar(pdf, &chaves, &expressoes, &op) {
             Ok(desfecho) => eprintln!("  ok   {}  {}", nome_base(pdf), resumo(&desfecho)),
             Err(e) => {
                 falhas += 1;
@@ -181,7 +210,44 @@ fn carregar_chaves(arq: &Path) -> Result<Vec<ChavePesquisa>> {
     Ok(chaves)
 }
 
-fn capturar(pdf: &Path, chaves: &[ChavePesquisa], op: &Opcoes) -> Result<Desfecho> {
+/// Lê as expressões extra. Arquivo ausente é aceito e devolve lista vazia — o
+/// oráculo continua útil só com as expressões de `chaves.json`.
+fn carregar_expressoes_extra(arq: &Path) -> Result<Vec<String>> {
+    if !arq.exists() {
+        return Ok(vec![]);
+    }
+    let bruto = std::fs::read_to_string(arq)
+        .with_context(|| format!("lendo expressões de {}", arq.display()))?;
+    let extras: Vec<String> =
+        serde_json::from_str(&bruto).with_context(|| format!("analisando {}", arq.display()))?;
+    Ok(extras)
+}
+
+/// Monta a lista de expressões do `.busca.json`: as de `chaves.json` primeiro,
+/// na ordem em que aparecem, seguidas das extras. Sem repetição — o mesmo texto
+/// pode pertencer a mais de um perfil (ver "BETA CONSTRUCOES" no corpus), e a
+/// busca não depende do perfil.
+fn expressoes_a_capturar(chaves: &[ChavePesquisa], extras: &[String]) -> Vec<String> {
+    let mut vistas = std::collections::HashSet::new();
+    let mut saida = vec![];
+    for texto in chaves
+        .iter()
+        .map(|c| c.expressao_nm.clone())
+        .chain(extras.iter().cloned())
+    {
+        if vistas.insert(texto.clone()) {
+            saida.push(texto);
+        }
+    }
+    saida
+}
+
+fn capturar(
+    pdf: &Path,
+    chaves: &[ChavePesquisa],
+    expressoes: &[String],
+    op: &Opcoes,
+) -> Result<Desfecho> {
     let conteudo = std::fs::read(pdf).with_context(|| format!("lendo {}", pdf.display()))?;
     let sha_pdf = sha256_hex(&conteudo);
     let documento = nome_base(pdf);
@@ -265,7 +331,24 @@ fn capturar(pdf: &Path, chaves: &[ChavePesquisa], op: &Opcoes) -> Result<Desfech
         },
     )?;
 
-    // Estágio 4 — laço de recorte (main.rs:282-326).
+    // Estágio 4 — busca por expressão, ANTES da deduplicação. Oráculo de F7.
+    gravar(
+        &op.dir_saida,
+        &format!("{documento}.busca.json"),
+        &SaidaBuscas {
+            documento: documento.clone(),
+            sha256_pdf: sha_pdf.clone(),
+            total_paginas: paginas.normalizadas.len(),
+            paginas_sha256: paginas
+                .normalizadas
+                .iter()
+                .map(|p| sha256_hex(p.as_bytes()))
+                .collect(),
+            buscas: indice::capturar_buscas(&idx, expressoes)?,
+        },
+    )?;
+
+    // Estágio 5 — laço de recorte (main.rs:282-326).
     let resultado = laco::executar(&idx, chaves, op.incluir_texto);
 
     gravar(
