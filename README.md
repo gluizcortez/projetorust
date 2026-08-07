@@ -26,7 +26,7 @@ Precisa de um PostgreSQL alcançável em
 `db/init/` aplicado. Depois:
 
 ```sh
-go run ./cmd/recorte-api
+go run ./src/main
 ```
 
 Com outro banco, defina `DATABASE_URL`.
@@ -144,8 +144,8 @@ a conferir.**
 | `docs/OPERACAO.md` | Guia de operação: tabela de chaves, ordem de ativação, valores por porte de carga, métricas e alarmes |
 | `docs/RELATORIO-PARIDADE.md` | Evidência da fase F12 e a recomendação explícita sobre o corte |
 | `api/openapi.yaml` | Contrato da API, com as adições opcionais marcadas por `x-chave` |
-| `cmd/recorte-api/` | Ponto de entrada |
-| `internal/` | O serviço: domínio, casos de uso, adaptadores e raiz de composição |
+| `src/main/` | Ponto de entrada |
+| `src/` | O serviço: domínio, casos de uso, adaptadores e raiz de composição, um nível de pacotes |
 | `db/init/` | Esquema e dois conjuntos de perfis de exemplo — o sintético e o do diário real |
 | `db/migrations/` | Migrações de banco |
 | `deploy/Dockerfile`, `docker-compose.yml` | Empacotamento e execução local |

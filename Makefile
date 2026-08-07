@@ -39,7 +39,7 @@ descer:
 ## build: compila o binário em bin/
 build:
 	@mkdir -p bin
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARIO) ./cmd/$(BINARIO)
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARIO) ./src/main
 	@echo "bin/$(BINARIO) $(VERSAO) ($(REVISAO))"
 
 ## docker: constrói a imagem de distribuição

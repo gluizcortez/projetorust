@@ -65,7 +65,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
         -trimpath \
         -ldflags "-s -w -X main.versao=${VERSAO} -X main.revisao=${REVISAO}" \
         -o /out/recorte-api \
-        ./cmd/recorte-api
+        ./src/main
 
 # Confere que o binário não ganhou dependências compartilhadas além de libc e
 # do carregador dinâmico — as duas que a imagem de distribuição fornece.

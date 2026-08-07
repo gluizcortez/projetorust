@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: recorte
       POSTGRES_DB: recorte
     ports:
-      # Exposta para que `go run ./cmd/recorte-api` na máquina hospedeira
+      # Exposta para que `go run ./src/main` na máquina hospedeira
       # alcance o mesmo banco — é o que faz o padrão de `DatabaseURLPadrao`
       # funcionar sem configuração.
       - "5432:5432"
