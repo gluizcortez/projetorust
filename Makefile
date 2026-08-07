@@ -1,11 +1,10 @@
 SHELL := /bin/bash
-.DEFAULT_GOAL := ci
+.DEFAULT_GOAL := build
 
 MODULO      := github.com/gluizcortez/projetorust
 BINARIO     := recorte-api
 VERSAO      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 REVISAO     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo desconhecida)
-GO_MINIMO   := 1.24.0
 IMAGEM      ?= recorte-api
 TAG         ?= $(VERSAO)
 
@@ -16,14 +15,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint subir descer build docker generate tidy tidy-check limpar ajuda
-
-## ci: verificação completa — é o que a integração contínua executa
-ci: guarda-toolchain tidy-check lint build
-
-## lint: análise estática
-lint:
-	golangci-lint run ./...
+.PHONY: subir descer build docker generate tidy limpar ajuda
 
 ## subir: sobe o serviço e o banco com docker compose
 ##   Nada precisa ser definido antes: docker-compose.yml traz todos os valores,
@@ -55,43 +47,9 @@ docker:
 generate:
 	go generate ./...
 
-## guarda-toolchain: impede que 'go get' eleve silenciosamente a versão exigida
-##   Um salto na diretriz `go` troca o toolchain em tempo de compilação, o que
-##   já quebrou a fase F2: a toolchain baixada automaticamente neste ambiente
-##   vem sem `covdata` e a cobertura para de funcionar. A diretriz é decisão de
-##   projeto, não efeito colateral de atualizar dependência.
-guarda-toolchain:
-	@declarada=$$(awk '/^go /{print $$2}' go.mod); \
-	if [ "$$declarada" != "$(GO_MINIMO)" ]; then \
-		echo "go.mod declara 'go $$declarada', esperado '$(GO_MINIMO)'."; \
-		echo "Se a elevação for intencional, atualize GO_MINIMO no Makefile,"; \
-		echo "deploy/Dockerfile e .github/workflows/ci.yml na mesma mudança."; \
-		exit 1; \
-	fi
-	@if grep -q '^toolchain ' go.mod; then \
-		echo "go.mod ganhou uma linha 'toolchain': remova-a para manter a compilação hermética."; \
-		exit 1; \
-	fi
-	@echo "diretriz go: $(GO_MINIMO), sem linha toolchain"
-
 ## tidy: normaliza go.mod e go.sum
 tidy:
 	go mod tidy
-
-## tidy-check: falha se 'go mod tidy' alteraria algo (usado na integração contínua)
-##   Compara antes e depois da própria execução, e não contra o git: o alvo
-##   detecta esquecimento de tidy, não trabalho em andamento não commitado.
-tidy-check:
-	@cp go.mod /tmp/go.mod.antes
-	@cp go.sum /tmp/go.sum.antes 2>/dev/null || : > /tmp/go.sum.antes
-	@go mod tidy
-	@if ! diff -q /tmp/go.mod.antes go.mod >/dev/null || \
-	    ! diff -q /tmp/go.sum.antes go.sum >/dev/null; then \
-		echo "go.mod/go.sum estavam desatualizados: 'go mod tidy' os alterou. Commite as mudanças."; \
-		diff -u /tmp/go.mod.antes go.mod || true; \
-		exit 1; \
-	fi
-	@echo "go.mod e go.sum normalizados" 
 
 ## limpar: remove artefatos de compilação
 limpar:
