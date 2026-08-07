@@ -153,6 +153,37 @@ Data do caderno não informada,Data de disponibilização não informada,Id do u
 Data do caderno é inválida,Data de disponibilização é inválida,Id do usuário não informado,Id do caderno não informado
 ```
 
+#### 1.4.2.1 De onde vem o arquivo, e onde ele fica — **MEDIDO**
+
+O PDF **chega na própria requisição**, na parte `pdf` do multipart. O serviço
+não busca o documento em disco, em fila, em armazenamento de objeto nem em
+diretório vigiado: quem submete é o cliente que chama `POST /pdf`. Não existe
+outro caminho de entrada.
+
+O que difere entre legado e porte é **onde os bytes ficam durante a requisição**:
+
+| | Legado (Salvo) | Porte (Go) |
+|---|---|---|
+| Leitura do corpo | Salvo grava a parte em arquivo temporário; `main.rs:233` lê de `arquivo.path()` | `r.MultipartReader()` lê do socket direto para memória |
+| Caminho | `/tmp/salvo_http_multipartXXXXXX/{nonce}.pdf` | — |
+| Sobrevive à requisição? | **não** — `Drop` de `FilePart` apaga arquivo e diretório | — |
+| Persiste depois? | **não** | **não** |
+
+MEDIDO por `tools/sonda-http --bin sonda-arquivo`. O efeito observável pela API é
+**idêntico**; a diferença é o meio, e importa para quem dimensiona `/tmp` ou
+monta o contêiner com sistema de arquivos somente leitura.
+
+O que sobrevive à importação, dos dois lados, é só `nome_original_pdf` e `hash`
+em `tb_importacao`, mais o texto das páginas que geraram recorte. **O documento
+em si não é guardado em lugar nenhum** — ver `DECISOES-ABERTAS.md`, **D-21**.
+
+> ⚠ **O arcabouço impõe um teto que o `main.rs` não pede.** O `salvo_core` traz
+> `GLOBAL_SECURE_MAX_SIZE = 64 KiB` desde a versão 0.75, aplicado ao corpo
+> inteiro. Acima dele `req.file("pdf")` devolve `None` e a resposta é
+> **400 `PDF não enviado`** — indistinguível de arquivo ausente. Se a versão de
+> produção for ≥ 0.75, o legado recusa qualquer diário real. O porte **não**
+> impõe teto por padrão. É **D-25**, bloqueante, e depende de **D-15**.
+
 #### 1.4.3 Respostas
 
 | # | Condição | Código | Corpo (literal) | Linhas |

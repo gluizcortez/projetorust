@@ -2244,3 +2244,114 @@ do volume. `prepararEsquema` dos testes de integração também o aplica.
 | Recortes gerados | 5 |
 | Tempo de processamento | 59 ms |
 | Sabotagem do extrator | 3 linhas da matriz + 4 do texto acusam |
+
+---
+
+## De onde vem o PDF — e o teto de 64 KiB que ninguém tinha visto
+
+**A pergunta veio de fora e era simples:** "onde estaria o arquivo PDF quando a
+API estiver em produção?". A resposta que dei primeiro citava D-21 e estava
+**parcialmente errada**. Medir corrigiu a resposta e destapou algo maior.
+
+### A resposta à pergunta
+
+O PDF **chega na própria requisição**. Não há de onde buscá-lo: nem disco
+vigiado, nem fila, nem armazenamento de objeto. Quem submete é o cliente que
+chama `POST /pdf`. Isso vale para os dois lados.
+
+O que difere é **onde os bytes ficam durante a requisição**, e aqui a
+documentação estava errada.
+
+### O que D-21 afirmava, e o que a medição mostrou
+
+D-21 dizia: *"os bytes do PDF vivem em memória durante o processamento (...) Não
+há gravação em disco, nem no legado nem no porte."*
+
+`main.rs:233` não lê o corpo da requisição — lê um ARQUIVO:
+
+```rust
+let conteudo = tokio::fs::read(&arquivo.path()).await.unwrap();
+```
+
+`arquivo.path()` só existe porque o Salvo **já gravou** aquela parte do
+multipart em disco. MEDIDO por `tools/sonda-http --bin sonda-arquivo`:
+
+| | Legado (Salvo 0.95.2) | Porte (Go) |
+|---|---|---|
+| Onde | `/tmp/salvo_http_multipartXXXXXX/{nonce}.pdf` | só memória |
+| Existe durante a requisição? | **sim** | não |
+| Sobrevive a ela? | **não** — `Drop` de `FilePart` apaga | — |
+
+A conclusão de D-21 continua inteira: nada persiste, não há de onde
+reprocessar. O que mudou é o alcance da afirmação — e isso importa para quem
+dimensiona `/tmp` ou monta o contêiner com sistema de arquivos somente leitura.
+
+O porte usa `r.MultipartReader()`, não `ParseMultipartForm`. A escolha foi feita
+na F9 por outro motivo — paridade no caso `filename=""` —, mas o efeito colateral
+é que o Go nunca grava temporário. `ParseMultipartForm` gravaria.
+
+### O achado maior: o arcabouço impõe um teto que o `main.rs` não pede
+
+A mesma sonda, ao tentar submeter o DOU real de 162 KiB, recebeu
+**`400 PDF não enviado`**. Varrendo o tamanho:
+
+```
+ 32.768 bytes  →  200 PDF carregado com sucesso
+ 65.136 bytes  →  400 PDF não enviado
+165.447 bytes  →  400 PDF não enviado     ← o DOU real deste repositório
+```
+
+A causa está no fonte do arcabouço:
+
+```rust
+// salvo_core-0.95.2/src/http/request.rs:33
+static GLOBAL_SECURE_MAX_SIZE: AtomicUsize = AtomicUsize::new(64 * 1024);
+```
+
+Vale para o **corpo inteiro**. Estourado, `req.file("pdf")` devolve `None`, o
+`main.rs:210` acumula `PDF não enviado` e responde 400 — **indistinguível de uma
+requisição que realmente não trouxe arquivo**. As 730 linhas do `main.rs` não
+configuram nada disso.
+
+Também medido, baixando os *crates* e conferindo o fonte: o teto entrou entre
+**0.70 e 0.75** e nunca mudou de valor.
+
+| Versão | Tem o teto? |
+|---|---|
+| 0.65.0 · 0.70.0 | **não** |
+| 0.75.0 até 0.95.2 | sim, 64 KiB |
+
+### Por que isso não virou código
+
+Um serviço que existe para ingerir Diários Oficiais e recusa tudo acima de
+64 KiB não processaria diário nenhum. As duas leituras — legado em Salvo < 0.75
+(aceita tudo, porte correto) ou ≥ 0.75 (recusa diários reais **hoje**) — não
+podem ser separadas sem o `Cargo.lock`, que é **D-15**, bloqueante desde a F0.
+
+Registrado como **D-25**, bloqueante, padrão provisório **não impor limite** —
+que é o comportamento atual e o único sob o qual o serviço cumpre a função que
+visivelmente cumpre. `MAX_UPLOAD_BYTES=65536` reproduz o teto se a resposta for
+"sim", mas não o corpo da resposta: hoje o porte devolve crítica de corpo
+grande, e o legado devolve `PDF não enviado`.
+
+**D-04 deixou de ser curiosidade de capacidade.** "Qual o maior PDF já
+processado" agora é evidência direta: qualquer resposta acima de 64 KiB prova a
+leitura (a) e fecha D-25 sem escrever uma linha.
+
+### A lição, de novo
+
+Duas rodadas seguidas — o caminho com espaço, agora o teto de tamanho — vieram
+de **perguntas de fora**, não de testes. E as duas encontraram documentação que
+afirmava mais do que havia sido medido. A F12 já tinha nomeado esse padrão; ele
+continua aparecendo.
+
+### Medições
+
+| O que | Valor |
+|---|---|
+| Caminho do temporário no legado | `/tmp/salvo_http_multipartXXXXXX/{nonce}.pdf` |
+| Sobrevive à requisição? | não |
+| Teto do corpo no Salvo ≥ 0.75 | 65.536 bytes |
+| Versões varridas | 0.65.0 · 0.70.0 · 0.75.0 · 0.80.0 · 0.85.0 · 0.88.0 · 0.89.0 · 0.90.0 · 0.94.0 · 0.95.0 · 0.95.1 · 0.95.2 |
+| Resposta do legado ao DOU real | `400 PDF não enviado` |
+| Resposta do porte ao DOU real | `200 PDF carregado com sucesso`, 5 recortes |

@@ -36,6 +36,7 @@
 | D-22 | Escopo da transação de gravação: por chave ou por recorte? | — | **aberta** · divergência conhecida | arquitetura |
 | D-23 | Os registros podem sair em stderr em vez de stdout? | — | **aberta** · divergência conhecida | operação |
 | D-24 | Caminho malformado: 400 do `net/http` onde o legado dá 404 | — | **aberta** · divergência conhecida, sem conserto barato | arquitetura |
+| D-25 | O legado recusa PDF acima de 64 KiB? O Salvo tem esse teto por padrão | **F13** | **aberta** · **BLOQUEANTE — depende de D-15** | quem mantém o Rust |
 
 ---
 
@@ -756,12 +757,36 @@ resolvem na mesma passada.
 verificou-se que **reprocessar é impossível**.
 
 **Por quê.** O serviço não guarda o documento. `recorte.tb_importacao` tem
-`nome_original_pdf` e `hash`, e nada mais; os bytes do PDF vivem em memória
-durante o processamento e são descartados junto com a tarefa. Não há gravação em
-disco, em objeto ou em coluna binária — nem no legado nem no porte. Reprocessar
-exigiria buscar o arquivo em algum lugar, e **não há lugar**.
+`nome_original_pdf` e `hash`, e nada mais. Reprocessar exigiria buscar o arquivo
+em algum lugar, e **não há lugar**.
 
 Isso não é limitação da implementação: é o desenho do legado.
+
+> ⚠ **CORRIGIDO por medição.** A frase anterior desta seção dizia que "os bytes
+> do PDF vivem em memória durante o processamento (...) não há gravação em
+> disco, nem no legado nem no porte". A segunda metade está certa; **a primeira
+> está errada para o legado**.
+>
+> `main.rs:233` não lê o corpo da requisição — lê um ARQUIVO:
+>
+> ```rust
+> let conteudo = tokio::fs::read(&arquivo.path()).await.unwrap();
+> ```
+>
+> `arquivo.path()` só existe porque o Salvo já gravou aquela parte do multipart
+> em disco. MEDIDO por `tools/sonda-http --bin sonda-arquivo`:
+>
+> | | Legado (Salvo 0.95.2) | Porte (Go) |
+> |---|---|---|
+> | Onde os bytes ficam | `/tmp/salvo_http_multipartXXXXXX/{nonce}.pdf` | só memória |
+> | Existe durante a requisição? | **sim** | não |
+> | Sobrevive à requisição? | **não** — `Drop` de `FilePart` apaga | — |
+>
+> **O que NÃO muda:** nada persiste dos dois lados, então a conclusão desta
+> decisão continua valendo inteira — não há de onde reprocessar. O que muda é o
+> alcance da afirmação: o legado toca o disco, o porte não, e isso importa para
+> quem dimensiona `/tmp` ou monta o contêiner com sistema de arquivos somente
+> leitura. Ver **D-25** para a consequência maior que a mesma medição revelou.
 
 **Consequência imediata.** As políticas implementadas são `observar` (padrão,
 apenas registra e conta) e `erro` (grava −1). `reprocessar` é recusada pela
@@ -968,3 +993,113 @@ linha de requisição de **cada** requisição da conexão (não só a primeira)
 reescreve `%` inválido como `%25` e corta o fragmento. Precisa acertar
 `Content-Length`, corpo em pedaços e atualização para WebSocket, e passa a ser
 código de segurança nosso, não do `net/http`. Recomendação: não.
+
+---
+
+## D-25 · O legado recusa PDF acima de 64 KiB? — **BLOQUEANTE**
+
+**Descoberta ao medir onde o legado põe o arquivo submetido** (D-21), a partir de
+uma pergunta simples de fora: "onde estaria o PDF quando a API estiver em
+produção?".
+
+### O fato medido
+
+`tools/sonda-http --bin sonda-arquivo` reconstrói o caminho de `main.rs:203-234`
+e submete multipart real contra um servidor Salvo real:
+
+| Tamanho da parte `pdf` | Corpo total | Resposta |
+|---|---|---|
+| 32.768 bytes | 33.251 | `200 PDF carregado com sucesso` |
+| 65.136 bytes | 65.619 | **`400 PDF não enviado`** |
+| 65.536 bytes | 66.019 | **`400 PDF não enviado`** |
+| 131.072 bytes | 131.555 | **`400 PDF não enviado`** |
+| **165.447 — o DOU real do repositório** | 165.930 | **`400 PDF não enviado`** |
+
+A causa está no fonte do arcabouço, não no `main.rs`:
+
+```rust
+// salvo_core-0.95.2/src/http/request.rs:33
+static GLOBAL_SECURE_MAX_SIZE: AtomicUsize = AtomicUsize::new(64 * 1024);
+```
+
+O limite vale para o **corpo inteiro**, não só para a parte de arquivo. Estourado
+ele, `req.file("pdf")` devolve `None`, o `main.rs:210` acumula a crítica
+`PDF não enviado` e a resposta é 400 — **indistinguível de uma requisição que
+realmente não trouxe arquivo**.
+
+O `main.rs` **não configura nada disso**: não há `set_secure_max_size`,
+`set_global_secure_max_size` nem o middleware `SecureMaxSize` em lugar nenhum
+das 730 linhas.
+
+### Quando o teto entrou no Salvo — também medido
+
+| Versão do `salvo_core` | Tem `GLOBAL_SECURE_MAX_SIZE`? |
+|---|---|
+| 0.65.0 | **não** |
+| 0.70.0 | **não** |
+| 0.75.0 | sim, 64 KiB |
+| 0.80.0 · 0.85.0 · 0.88.0 · 0.89.0 | sim, 64 KiB |
+| 0.90.0 · 0.94.0 · 0.95.0 · 0.95.1 · 0.95.2 | sim, 64 KiB |
+
+O teto entrou entre **0.70 e 0.75** e nunca mudou de valor desde então.
+
+### Por que isso é grave, e por que provavelmente NÃO é o que roda em produção
+
+Um serviço que existe para ingerir Diários Oficiais e recusa qualquer documento
+acima de 64 KiB não processaria diário nenhum: o DOU real deste repositório tem
+162 KiB **em uma única página**, e edições completas têm megabytes.
+
+Duas leituras, e nenhuma pode ser escolhida sem D-15:
+
+**(a) O legado roda Salvo < 0.75.** Sem o teto, aceita qualquer tamanho. É a
+leitura compatível com o serviço funcionar. Nesse caso o porte já está correto e
+esta decisão fecha sem código.
+
+**(b) O legado roda Salvo ≥ 0.75.** Então ele recusa diários de verdade **hoje,
+em produção**, com `400 PDF não enviado` — e a recusa é silenciosa do ponto de
+vista do banco: sem registro em `tb_importacao`, sem status −1, sem nada. Só
+apareceria em quem lê o corpo da resposta do `POST /pdf`.
+
+A leitura (b) tem uma consequência desconfortável: se for verdade, existe um
+defeito grave e não percebido no legado, e o porte em Go — que aceita — está
+**consertando algo em silêncio**, contra a regra dura do projeto.
+
+### Como responder
+
+1. Obter o `Cargo.lock` de produção (**D-15**) e ler a versão de `salvo_core`.
+2. Se ≥ 0.75, confirmar contra o serviço em produção com um documento real:
+   ```sh
+   curl -i -X POST https://<legado>/pdf -H "X-API-KEY: …" \
+     -F data-caderno=2026-07-08 -F data-disponibilizacao=2026-07-08 \
+     -F id-usuario=1 -F id-caderno=1 -F pdf=@diario-real.pdf
+   ```
+   `400 PDF não enviado` para um PDF que existe confirma o teto.
+3. Conferir se há intermediário — Nginx, balanceador, API *gateway* — que já
+   recuse ou já reescreva o corpo antes de o Salvo ver.
+
+### Padrão provisório
+
+**Não impor limite**, que é o comportamento atual do porte: `MAX_UPLOAD_BYTES`
+nasce em `0`, desligado. É o único padrão sob o qual o serviço cumpre a função
+que ele visivelmente cumpre em produção.
+
+Registrado como **risco aceito**: se a resposta for (b), o porte diverge do
+legado aceitando o que ele recusa.
+
+### Se a resposta for (b) — o que implementar
+
+A chave **já existe**: `MAX_UPLOAD_BYTES=65536`. O que ela **não** reproduz é a
+resposta — hoje ela devolve 400 com crítica de corpo grande (D-16, opção B),
+enquanto o legado devolve 400 `PDF não enviado`, sem distinguir de arquivo
+ausente. Reproduzir exigiria uma segunda opção de política, não código novo de
+leitura.
+
+### Relação com as outras decisões
+
+- **D-15** — sem o `Cargo.lock` não há como escolher entre (a) e (b). É mais uma
+  consequência concreta daquela pergunta ficar aberta.
+- **D-16** — mediu o limite prático de `MAX_UPLOAD_BYTES` sem saber que o
+  arcabouço já impunha um. A opção B continua válida; ganha um valor candidato.
+- **D-04** — "qual o maior PDF já processado" deixa de ser curiosidade de
+  capacidade e vira evidência direta: qualquer resposta acima de 64 KiB **prova
+  a leitura (a)** e fecha esta decisão.
