@@ -81,9 +81,15 @@ func TestPadroesReproduzemOLegado(t *testing.T) {
 		obtido   any
 		esperado any
 	}{
-		{"ServidorIP", cfg.ServidorIP, "192.168.42.1"},
+		// DIVERGE do legado, que ligava em 192.168.42.1 — endereço que só
+		// existe na rede daquele serviço e impedia rodar local. `0.0.0.0` é um
+		// superconjunto: atende também naquele endereço quando ele existe.
+		{"ServidorIP", cfg.ServidorIP, "0.0.0.0"},
 		{"ServidorPorta", cfg.ServidorPorta, uint16(6001)},
-		{"Endereco", cfg.Endereco(), "192.168.42.1:6001"},
+		{"Endereco", cfg.Endereco(), "0.0.0.0:6001"},
+		// Os padrões de API_KEY e DATABASE_URL não entram aqui: este teste roda
+		// com `comSegredosValidos`, que os define. Quem os cobre é
+		// TestAmbienteVazioCarrega.
 		{"ConfigEstrita", cfg.ConfigEstrita, false},
 		{"MaxUploadBytes", cfg.MaxUploadBytes, int64(0)},
 		{"MaxImportacoesConcorrentes", cfg.MaxImportacoesConcorrentes, 0},
@@ -178,30 +184,51 @@ func TestPortaReproduzDefeitoA19(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------
-// Obrigatórias: uma única falha listando todos os problemas
+// O serviço sobe com o ambiente VAZIO
 // -------------------------------------------------------------------------
 
-func TestObrigatoriasAusentesFalhamJuntas(t *testing.T) {
+// TestAmbienteVazioCarrega é o requisito de "rodar local sem preparo".
+//
+// Até aqui, `DATABASE_URL` e `API_KEY` eram obrigatórias e o serviço recusava
+// subir sem elas. Agora as duas têm padrão — o da chave é o MESMO valor que o
+// serviço em Rust trazia como constante no código-fonte.
+func TestAmbienteVazioCarrega(t *testing.T) {
 	ambienteLimpo(t)
 
-	_, err := carregar(t)
-	if err == nil {
-		t.Fatal("esperava erro com DATABASE_URL e API_KEY ausentes")
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("o ambiente vazio deveria carregar: %v", err)
 	}
 
-	erroCfg, ok := config.ComoErroDeConfiguracao(err)
-	if !ok {
-		t.Fatalf("esperava *ErroDeConfiguracao, obtive %T", err)
+	if cfg.APIKey.Revelar() != config.APIKeyPadrao {
+		t.Errorf("APIKey = %q; esperava o padrão", cfg.APIKey.Revelar())
 	}
-	if len(erroCfg.Problemas) != 2 {
-		t.Errorf("esperava 2 problemas, obtive %d: %v", len(erroCfg.Problemas), erroCfg.Problemas)
+	if cfg.DatabaseURL.Revelar() != config.DatabaseURLPadrao {
+		t.Errorf("DatabaseURL = %q; esperava o padrão", cfg.DatabaseURL.Revelar())
 	}
+}
 
-	msg := err.Error()
-	for _, nome := range []string{"DATABASE_URL", "API_KEY"} {
-		if !strings.Contains(msg, nome) {
-			t.Errorf("a mensagem única deveria mencionar %s; obtive:\n%s", nome, msg)
-		}
+// TestAmbienteSobrescreveOsPadroes: o padrão existe para o caso vazio, não para
+// competir com o que o operador definir.
+func TestAmbienteSobrescreveOsPadroes(t *testing.T) {
+	ambienteLimpo(t)
+	t.Setenv("API_KEY", "chave-de-producao")
+	t.Setenv("DATABASE_URL", "postgres://outro:outro@10.0.0.9:5432/prod?sslmode=require")
+	t.Setenv("SERVIDOR_IP", config.ServidorIPDoLegado)
+
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("carregar: %v", err)
+	}
+	if cfg.APIKey.Revelar() != "chave-de-producao" {
+		t.Errorf("APIKey = %q; o ambiente tem de vencer o padrão", cfg.APIKey.Revelar())
+	}
+	if !strings.Contains(cfg.DatabaseURL.Revelar(), "10.0.0.9") {
+		t.Errorf("DatabaseURL = %q; o ambiente tem de vencer o padrão", cfg.DatabaseURL.Revelar())
+	}
+	// E o endereço do legado continua alcançável por configuração.
+	if cfg.ServidorIP != "192.168.42.1" {
+		t.Errorf("ServidorIP = %q; SERVIDOR_IP deveria restaurar o endereço do legado", cfg.ServidorIP)
 	}
 }
 
@@ -221,9 +248,10 @@ func TestErrosDeVariasVariaveisSaoAcumulados(t *testing.T) {
 	if !ok {
 		t.Fatalf("esperava *ErroDeConfiguracao, obtive %T", err)
 	}
-	// 5 malformadas + 2 obrigatórias ausentes.
-	if len(erroCfg.Problemas) != 7 {
-		t.Errorf("esperava 7 problemas acumulados, obtive %d:\n%v",
+	// As cinco malformadas. Nenhuma variável é obrigatória: `DATABASE_URL` e
+	// `API_KEY` passaram a ter padrão.
+	if len(erroCfg.Problemas) != 5 {
+		t.Errorf("esperava 5 problemas acumulados, obtive %d:\n%v",
 			len(erroCfg.Problemas), erroCfg.Problemas)
 	}
 }
@@ -310,22 +338,32 @@ func TestSegredosNuncaVazamEmNenhumaSaida(t *testing.T) {
 	}
 }
 
-func TestErroDeValidacaoNaoEcoaSegredo(t *testing.T) {
-	// Uma DATABASE_URL presente mas em branco: o erro é de ausência e não pode
-	// carregar nada do valor.
+// TestErroDeConfiguracaoNaoEcoaSegredo.
+//
+// A propriedade continua valendo mesmo agora que os dois segredos têm padrão:
+// a mensagem de erro acumulada é montada com o NOME das variáveis, e um valor
+// secreto definido no ambiente não pode aparecer nela por tabela.
+func TestErroDeConfiguracaoNaoEcoaSegredo(t *testing.T) {
+	const chaveReal = "chave-secreta-que-nao-pode-vazar"
+	const urlReal = "postgres://usuario:senha-secreta@10.0.0.9:5432/prod"
+
 	ambienteLimpo(t)
-	t.Setenv("DATABASE_URL", "   ")
-	t.Setenv("API_KEY", "   ")
+	t.Setenv("API_KEY", chaveReal)
+	t.Setenv("DATABASE_URL", urlReal)
+	// Uma variável malformada, para que HAJA erro a inspecionar.
+	t.Setenv("LOG_NIVEL", "gritante")
 
 	_, err := carregar(t)
 	if err == nil {
-		t.Fatal("esperava erro para valores em branco")
+		t.Fatal("esperava erro para LOG_NIVEL inválido")
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "   ") && strings.Count(msg, " ") > 40 {
-		t.Errorf("a mensagem parece ecoar o valor bruto: %q", msg)
+	for _, segredo := range []string{chaveReal, "senha-secreta", urlReal} {
+		if strings.Contains(msg, segredo) {
+			t.Errorf("a mensagem de erro vazou %q: %s", segredo, msg)
+		}
 	}
-	for _, nome := range []string{"DATABASE_URL", "API_KEY"} {
+	for _, nome := range []string{"LOG_NIVEL"} {
 		if !strings.Contains(msg, nome) {
 			t.Errorf("a mensagem deveria mencionar %s: %s", nome, msg)
 		}

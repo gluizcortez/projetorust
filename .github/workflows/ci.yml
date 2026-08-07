@@ -66,14 +66,12 @@ jobs:
       - name: Regra de dependência
         run: go test ./internal -run TestRegraDeDependencia -v
 
-      # `CicloDeVida` entra no filtro porque os testes de ponta a ponta da fase
-      # F10 compilam o binário, enviam SINAIS REAIS e conferem o código de
-      # saída — é a única verificação de que o encerramento funciona no
-      # processo, e não só em memória.
+      # -p 1 serializa os pacotes: `internal/adapter/postgres` derruba o esquema
+      # que `internal/app` consulta, no MESMO banco.
       - name: Testes de integração
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-        run: go test ./... -race -tags=integration -run 'Integration|Integracao|CicloDeVida' -v
+        run: go test ./... -race -tags=integration -p 1 -run 'Integration|Integracao' -v
 
       # INV-P16: a data não pode deslocar um dia conforme o fuso do processo.
       - name: Integração com fuso a leste de Greenwich
@@ -98,77 +96,6 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
-
-  # Os testes de PROPRIEDADE das fases F6 e F7 comparam a implementação Go com
-  # o legado em Rust rodando de verdade, caso a caso. São os testes que
-  # encontraram as divergências que o corpus dourado não pegou — 320.142 na F6,
-  # 13 mais 2 na F7 —, e sem os binários oráculo eles se PULAM em silêncio.
-  #
-  # Ficam em job separado porque compilar o ferramental em Rust custa caro: o
-  # `mupdf-sys` compila o MuPDF do zero. Com o cache do cargo, só a primeira
-  # execução paga.
-  paridade:
-    name: paridade contra o legado em Rust
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache do cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            tools/capturar-corpus/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('tools/capturar-corpus/Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
-
-      - name: Dependências de compilação do MuPDF
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
-
-      - name: Compilar os oráculos
-        run: make oraculos
-
-      # Sem -race: estes testes não têm concorrência, e o detector triplicaria o
-      # tempo de um milhão e meio de casos.
-      - name: Testes de paridade e de propriedade
-        run: go test ./test/parity/... -v
-
-      # O comparador das cinco camadas. Sai com 0 aprovado, 1 reprovado e 2
-      # quando não conseguiu medir — e a distinção entre 1 e 2 é o ponto: um
-      # corpus que deixou de ser gerado não pode passar por "sem divergência".
-      - name: Comparador de paridade — cinco camadas
-        run: |
-          mkdir -p build
-          go build -o build/comparador ./tools/comparador/cmd/comparador
-          ./build/comparador -corpus test/testdata/corpus \
-            -esperado test/testdata/expected -json build/paridade.json
-
-      - name: Relatório de paridade
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: relatorio-paridade
-          path: build/paridade.json
-          if-no-files-found: warn
-
-      # O corpus dourado é versionado. Se recapturá-lo mudar qualquer arquivo, ou
-      # o ferramental mudou de comportamento ou a captura não é determinística —
-      # as duas coisas invalidam o oráculo.
-      - name: O corpus capturado é reprodutível
-        run: |
-          cargo run --release --manifest-path tools/capturar-corpus/Cargo.toml \
-            --bin capturar-corpus -- test/testdata/corpus test/testdata/expected
-          git diff --exit-code test/testdata/expected
 
   imagem:
     name: imagem de distribuição

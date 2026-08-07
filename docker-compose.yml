@@ -1,0 +1,95 @@
+# Serviço de recorte de diários oficiais — execução local completa.
+#
+#     docker compose up --build
+#
+# Sobe o PostgreSQL, aplica o esquema e sobe o serviço em http://localhost:6001.
+# Nada precisa ser definido antes: todos os valores estão aqui.
+#
+# ------------------------------------------------------------------------
+# A API KEY ESTÁ NESTE ARQUIVO, EM CLARO
+# ------------------------------------------------------------------------
+# É o mesmo valor que o serviço original em Rust trazia como constante no
+# código-fonte (`const API_KEY: &str = "01956cb2-..."`), e o mesmo que
+# `config.APIKeyPadrao` usa quando a variável não é definida.
+#
+# Isso significa que quem tem o repositório tem a credencial. Não é regressão
+# em relação ao original — que a embutia no binário, de onde `strings` a
+# extrairia —, mas também não vira segredo por estar num YAML.
+#
+# PARA UMA IMPLANTAÇÃO REAL, troque este valor por um segredo do orquestrador.
+# A variável de ambiente sempre vence o padrão do código.
+# ------------------------------------------------------------------------
+
+name: recorte
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: recorte
+      POSTGRES_PASSWORD: recorte
+      POSTGRES_DB: recorte
+    ports:
+      # Exposta para que `go run ./cmd/recorte-api` na máquina hospedeira
+      # alcance o mesmo banco — é o que faz o padrão de `DatabaseURLPadrao`
+      # funcionar sem configuração.
+      - "5432:5432"
+    volumes:
+      - dados-postgres:/var/lib/postgresql/data
+      # Tudo em /docker-entrypoint-initdb.d roda UMA vez, na criação do
+      # volume. Ordem alfabética: o esquema antes do índice.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recorte -d recorte"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  recorte-api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # --- credencial e conexão ---
+      API_KEY: "01956cb2-2f85-7440-9767-1a6651c10e0f"
+      DATABASE_URL: "postgres://recorte:recorte@postgres:5432/recorte?sslmode=disable"
+
+      # --- escuta ---
+      #
+      # 0.0.0.0 é obrigatório DENTRO do contêiner: ligar num endereço
+      # específico do hospedeiro não alcança a rede do Docker.
+      SERVIDOR_IP: "0.0.0.0"
+      SERVIDOR_PORTA: "6001"
+
+      # --- registro ---
+      LOG_NIVEL: "info"
+      LOG_FORMATO: "text"
+
+      # --- chaves de evolução ---
+      #
+      # Ligadas AQUI porque são úteis em desenvolvimento e ADIÇÃO PURA: elas
+      # não alteram nenhuma rota nem nenhuma resposta existente. Todas as
+      # demais ficam no padrão. Ver docs/OPERACAO.md.
+      HEALTH_ENDPOINTS: "true"
+      STATUS_ENDPOINT: "true"
+
+      # Encerramento com teto, para que `docker compose down` não espere para
+      # sempre por uma importação travada. O padrão zero é o do legado.
+      SHUTDOWN_TIMEOUT: "30s"
+    ports:
+      - "6001:6001"
+    healthcheck:
+      # O próprio binário sabe se sondar: `-healthcheck` consulta /ping e sai
+      # com 0 ou 1. Dispensa curl na imagem de distribuição.
+      test: ["CMD", "/usr/local/bin/recorte-api", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  dados-postgres:

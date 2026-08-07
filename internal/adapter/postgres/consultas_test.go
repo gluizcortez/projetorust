@@ -1,7 +1,8 @@
 package postgres_test
 
 import (
-	"os"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"testing"
@@ -9,114 +10,82 @@ import (
 	"github.com/gluizcortez/projetorust/internal/adapter/postgres"
 )
 
-// origemDaConsulta localiza cada literal SQL no código Rust de referência.
+// somaDaConsulta congela o resumo SHA-256 de cada consulta literal.
 //
-// Os intervalos são [primeira linha com a aspa de abertura, linha com a aspa
-// de fechamento], em base 1 — os mesmos citados em docs/ESPECIFICACAO.md §2.5.
-var origemDaConsulta = map[string][2]int{
-	"registrar_pdf":                {448, 462},
-	"obter_chaves_pesquisa":        {545, 563},
-	"salvar_recorte/recorte":       {574, 585},
-	"salvar_recorte/texto":         {587, 595},
-	"atualizar_status_importacao":  {664, 671},
-	"registrar_inicio_importacao":  {683, 690},
-	"registrar_termino_importacao": {701, 709},
+// # Por que resumo, e não comparação com o Rust
+//
+// Até aqui este teste lia `reference/main.rs` e comparava BYTE A BYTE com o
+// literal de lá. O arquivo de referência saiu do repositório junto com o
+// ferramental de paridade — e a propriedade que ele protegia continua sendo a
+// mais importante da camada de persistência:
+//
+//	NENHUMA destas consultas pode ser reescrita, reformatada ou "otimizada".
+//
+// O `ORDER BY` de `obter_chaves_pesquisa` governa a deduplicação por perfil
+// (INV-P12) e portanto QUAL EXPRESSÃO fica gravada numa página disputada.
+// `salvar_recorte/texto` grava o literal `'PDF'` dentro do próprio SQL. Um
+// espaço a mais em qualquer uma delas muda o conteúdo do banco.
+//
+// Sem o Rust, o oráculo passa a ser este resumo: ele não prova que a consulta
+// é igual à do legado — isso foi provado quando a referência existia e está
+// registrado em docs/ESPECIFICACAO.md §2.5 —, mas prova que ela não MUDOU
+// desde então, que é o que um teste de regressão precisa fazer.
+//
+// # Se algum destes valores mudar
+//
+// A pergunta certa NÃO é "qual o novo resumo". É: por que a consulta mudou?
+// Alterá-la exige reabrir a comparação com o serviço original, hoje disponível
+// apenas no histórico do git — `git show 2febb7a:reference/main.rs`.
+var somaDaConsulta = map[string]string{
+	"registrar_pdf":                "bf04a141970f2829555bd89536a5fd0f3b2d91ddcd7c3a761e4d6d16f0c3f8a8",
+	"obter_chaves_pesquisa":        "b9a5ffd8412a1dfba894186b155cc2f859d9d0736a0ed87f98fa2bc48b4f407d",
+	"salvar_recorte/recorte":       "cbb7cc3ae3d5e80ebb9b73191c08dc921be843f93b9fbb1d9acf73f4d6ac42a0",
+	"salvar_recorte/texto":         "3c130d593f7cd925200250742e760d1257232f417fa725a7cb20ec7a7688dcbb",
+	"atualizar_status_importacao":  "bb433acb9635fb759f78abdba479f3e9047c0c31f38dfe7b73876a2bf729c316",
+	"registrar_inicio_importacao":  "2f35a8b7d4b08ce374047e06400ed449b8b61017c13d9d2afe302352d8ac8f01",
+	"registrar_termino_importacao": "a29ba75cc7b667b4c1a29194781c81256e928919ca97750f656eca6f886c2685",
 }
 
-// TestConsultasSaoIdenticasAoLegado é o critério de aceite central da fase F4.
-//
-// Carrega cada consulta das DUAS fontes — o arquivo .sql embutido no binário e
-// o literal dentro de reference/main.rs — e compara BYTE A BYTE. Qualquer
-// reformatação, reordenação de coluna ou "otimização" de uma consulta reprova.
-func TestConsultasSaoIdenticasAoLegado(t *testing.T) {
-	bruto, err := os.ReadFile("../../../reference/main.rs")
-	if err != nil {
-		t.Fatalf("lendo a referência normativa: %v", err)
-	}
-	linhas := strings.Split(string(bruto), "\n")
-
+// TestConsultasNaoMudaram é o critério de aceite herdado da fase F4.
+func TestConsultasNaoMudaram(t *testing.T) {
 	embutidas := postgres.ConsultasLiterais()
-	if len(embutidas) != len(origemDaConsulta) {
+	if len(embutidas) != len(somaDaConsulta) {
 		t.Fatalf("o pacote expõe %d consultas e o teste conhece %d",
-			len(embutidas), len(origemDaConsulta))
+			len(embutidas), len(somaDaConsulta))
 	}
 
-	for nome, intervalo := range origemDaConsulta {
+	for nome, esperada := range somaDaConsulta {
 		t.Run(nome, func(t *testing.T) {
-			esperada := literalDoRust(t, linhas, intervalo[0], intervalo[1])
-			obtida, presente := embutidas[nome]
+			sql, presente := embutidas[nome]
 			if !presente {
 				t.Fatalf("consulta %q não está embutida no pacote", nome)
 			}
-
+			soma := sha256.Sum256([]byte(sql))
+			obtida := hex.EncodeToString(soma[:])
 			if obtida == esperada {
 				return
 			}
-
-			// Diferença: aponta o primeiro byte divergente com contexto.
-			pos := primeiraDivergencia(obtida, esperada)
-			t.Errorf(
-				"a consulta embutida DIVERGE do literal de main.rs:%d-%d\n"+
-					"  primeira divergência no byte %d\n"+
-					"  embutida: %q\n"+
-					"  legado:   %q\n"+
-					"  A consulta é transcrição literal: nenhum caractere pode ser alterado.",
-				intervalo[0], intervalo[1], pos,
-				trecho(obtida, pos), trecho(esperada, pos),
-			)
+			t.Errorf("a consulta MUDOU\n  resumo esperado: %s\n  resumo obtido:   %s\n"+
+				"  Alterar uma consulta literal muda o conteúdo do banco. Se a mudança\n"+
+				"  for intencional, compare de novo com o serviço original:\n"+
+				"      git show 2febb7a:reference/main.rs\n"+
+				"  e registre a decisão em docs/ESPECIFICACAO.md §2.5.\n\n%s",
+				esperada, obtida, sql)
 		})
 	}
 }
 
-// literalDoRust extrai o conteúdo de uma string literal Rust delimitada pelas
-// linhas informadas, preservando cada byte — inclusive espaços à direita.
-func literalDoRust(t *testing.T, linhas []string, primeira, ultima int) string {
-	t.Helper()
-	if primeira < 1 || ultima > len(linhas) || primeira >= ultima {
-		t.Fatalf("intervalo inválido: %d-%d", primeira, ultima)
-	}
-
-	abre := linhas[primeira-1]
-	idx := strings.Index(abre, `r"`)
-	if idx >= 0 {
-		idx += 2
-	} else {
-		idx = strings.Index(abre, `"`)
-		if idx < 0 {
-			t.Fatalf("linha %d não abre uma string: %q", primeira, abre)
-		}
-		idx++
-	}
-
-	fecha := linhas[ultima-1]
-	fim := strings.Index(fecha, `"`)
-	if fim < 0 {
-		t.Fatalf("linha %d não fecha a string: %q", ultima, fecha)
-	}
-
-	partes := []string{abre[idx:]}
-	partes = append(partes, linhas[primeira:ultima-1]...)
-	partes = append(partes, fecha[:fim])
-	return strings.Join(partes, "\n")
-}
-
-func primeiraDivergencia(a, b string) int {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[i] != b[i] {
-			return i
+// TestConsultasDeEvolucaoSaoDisjuntas: as consultas da fase F11 NÃO existem no
+// legado e não podem se misturar às literais.
+func TestConsultasDeEvolucaoSaoDisjuntas(t *testing.T) {
+	literais := postgres.ConsultasLiterais()
+	for nome := range postgres.ConsultasDeEvolucao() {
+		if _, colide := literais[nome]; colide {
+			t.Errorf("a consulta de evolução %q colide com uma literal", nome)
 		}
 	}
-	return n
 }
 
-func trecho(s string, pos int) string {
-	inicio := max(0, pos-30)
-	fim := min(len(s), pos+30)
-	return s[inicio:fim]
-}
-
-// TestOrderByDasChavesEhIntocavel protege a cláusula que governa INV-P12.
 func TestOrderByDasChavesEhIntocavel(t *testing.T) {
 	consulta := postgres.ConsultasLiterais()["obter_chaves_pesquisa"]
 

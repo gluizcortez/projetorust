@@ -1,9 +1,0 @@
-{
-  "documento": "23-f5-caracteres-de-marcacao",
-  "sha256_pdf": "1fa2fc90cd7d1f072263bbd2a84ea893d0714afb47afb98e58a07d4d9a00d76d",
-  "estagio": "bruto",
-  "total_paginas": 1,
-  "paginas": [
-    "DIARIO OFICIAL DO MUNICIPIO - EDICAO SINTETICA\nContratada: ACME & FILHOS <LTDA>\nProcesso \"administrativo\" no 5<7\nComparativo: a > b && c < d\n<p style=\"top:1pt\">isto nao e uma tag</p>\nEntidades literais: &amp; &lt; &gt; &quot; &#65;\n"
-  ]
-}

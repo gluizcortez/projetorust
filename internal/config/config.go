@@ -16,8 +16,25 @@ import (
 
 // Padrões do legado. Ver reference/main.rs:24-25 e docs/ESPECIFICACAO.md §1.1.
 const (
-	ServidorIPPadrao    = "192.168.42.1"
+	// ServidorIPPadrao DIVERGE do legado, que usava `192.168.42.1`.
+	//
+	// Aquele endereço só existe na rede em que o serviço original rodava: numa
+	// máquina de desenvolvimento ou dentro de um contêiner, ligar nele falha com
+	// "cannot assign requested address" e o processo não sobe. Era o principal
+	// impedimento para rodar local.
+	//
+	// `0.0.0.0` é um SUPERCONJUNTO: ele atende em todas as interfaces, inclusive
+	// na `192.168.42.1` quando ela existe. Nenhuma requisição que chegava ao
+	// serviço antes deixa de chegar agora — o que muda é que ele também atende
+	// nas demais. Definir SERVIDOR_IP restaura qualquer endereço específico.
+	ServidorIPPadrao    = "0.0.0.0"
 	ServidorPortaPadrao = uint16(6001)
+
+	// ServidorIPDoLegado é o endereço que o serviço original usava.
+	//
+	// Preservado como constante para quem precisar reproduzir exatamente aquele
+	// comportamento: `SERVIDOR_IP=192.168.42.1`.
+	ServidorIPDoLegado = "192.168.42.1"
 
 	// IndexMemoriaBytesPadrao reproduz o orçamento do escritor de índice do
 	// legado (reference/main.rs:519). No índice próprio da fase F7 o valor não
@@ -54,6 +71,47 @@ const (
 	// VarreduraLotePadrao é quantas linhas uma passagem tranca.
 	VarreduraLotePadrao = 100
 )
+
+// APIKeyPadrao é a credencial de `X-API-KEY` quando a variável não é definida.
+//
+// # É o MESMO valor do serviço em Rust
+//
+// Lá ela era uma constante no código-fonte — `const API_KEY: &str = "01956..."`
+// — e não vinha do ambiente. Aqui ela é um PADRÃO: o valor é o mesmo, e
+// definir `API_KEY` continua sobrescrevendo. `docker-compose.yml` a declara
+// explicitamente.
+//
+// # O que isso significa, dito sem rodeio
+//
+// A chave está no repositório. Quem tem o código tem a credencial. Isso não é
+// uma regressão em relação ao original — que a trazia embutida no binário, de
+// onde qualquer um a extrairia com `strings` —, mas também não vira segredo por
+// estar num arquivo diferente.
+//
+// **Para uma implantação real, defina `API_KEY` no ambiente.** O padrão existe
+// para que o serviço rode sem configuração alguma, não para ser usado como
+// credencial de produção.
+//
+// — ver o parágrafo acima. Suprimido aqui para que a decisão fique num lugar só.
+//
+//nolint:gosec // G101: é credencial em claro DE PROPÓSITO, e o aviso está certo
+const APIKeyPadrao = "01956cb2-2f85-7440-9767-1a6651c10e0f"
+
+// DatabaseURLPadrao aponta para um PostgreSQL local.
+//
+// O legado exigia `DATABASE_URL` e entrava em pânico sem ela
+// (reference/main.rs:36). O padrão daqui aponta para o banco que o
+// `docker-compose.yml` sobe, e é o que permite `go run ./cmd/recorte-api`
+// funcionar numa máquina de desenvolvimento sem preparo.
+//
+// Em produção, defina a variável. Um padrão apontando para `localhost` não
+// causa dano silencioso — ele falha ruidosamente no arranque, porque não há
+// banco ali.
+//
+// para desenvolvimento. Não há segredo a proteger num banco descartável.
+//
+//nolint:gosec // G101: a senha é `recorte`, do PostgreSQL que o compose sobe
+const DatabaseURLPadrao = "postgres://recorte:recorte@localhost:5432/recorte?sslmode=disable"
 
 // PoliticasDeVarreduraAceitas são os valores de VARREDURA_ORFAS_POLITICA.
 //
@@ -247,9 +305,13 @@ func Carregar(ctx context.Context) (*Config, error) {
 	cfg.ServidorIP = l.texto("SERVIDOR_IP", ServidorIPPadrao)
 	cfg.ServidorPorta = l.porta("SERVIDOR_PORTA", ServidorPortaPadrao, cfg.ConfigEstrita)
 
-	// --- segredos: obrigatórios, sem padrão embutido ---
-	cfg.DatabaseURL = URLSegredo(l.obrigatorioSensivel("DATABASE_URL"))
-	cfg.APIKey = Segredo(l.obrigatorioSensivel("API_KEY"))
+	// --- credencial e conexão ---
+	//
+	// As duas têm PADRÃO, e isso é uma decisão explícita: o serviço precisa
+	// subir sem nenhuma variável definida. Ver APIKeyPadrao e DatabaseURLPadrao
+	// para o que cada padrão significa e quando ele NÃO serve.
+	cfg.DatabaseURL = URLSegredo(l.texto("DATABASE_URL", DatabaseURLPadrao))
+	cfg.APIKey = Segredo(l.texto("API_KEY", APIKeyPadrao))
 
 	// --- observabilidade ---
 	cfg.LogNivel = l.nivelDeLog("LOG_NIVEL", slog.LevelInfo)
@@ -316,19 +378,6 @@ func (l *leitor) texto(nome, padrao string) string {
 		return v
 	}
 	return padrao
-}
-
-// obrigatorioSensivel lê uma variável obrigatória cujo valor é secreto.
-//
-// A mensagem de erro jamais inclui o valor — nem um prefixo dele. O único
-// problema possível aqui é a ausência.
-func (l *leitor) obrigatorioSensivel(nome string) string {
-	v, ok := os.LookupEnv(nome)
-	if !ok || strings.TrimSpace(v) == "" {
-		l.anotar("%s é obrigatória e não foi definida", nome)
-		return ""
-	}
-	return v
 }
 
 // porta reproduz reference/main.rs:45-48.

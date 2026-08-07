@@ -14,7 +14,14 @@ import (
 	"github.com/gluizcortez/projetorust/internal/domain"
 )
 
-const dirCorpus = "../../../test/testdata/corpus"
+// dirCorpus são os poucos PDFs mantidos como fixture DESTE pacote.
+//
+// O corpus dourado completo, com os 28 documentos e os oráculos capturados do
+// serviço em Rust, saiu do repositório junto com o ferramental de paridade.
+// Estes cinco continuam aqui porque exercitam o extrator sem depender de nada
+// externo: um documento normal, um volumoso, e os três de entrada inválida que
+// fixam INV-P20.
+const dirCorpus = "testdata"
 
 func lerPDF(t *testing.T, nome string) []byte {
 	t.Helper()

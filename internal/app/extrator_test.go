@@ -32,12 +32,16 @@ import (
 func TestExtratorDeProducaoNormaliza(t *testing.T) {
 	// O documento tem uma palavra partida por hífen no fim da linha e
 	// acentuação — as duas transformações que a normalização aplica.
-	const documento = "03-inv-p02-hifen-ascii.pdf"
-	caminho := filepath.Join("..", "..", "test", "testdata", "corpus", documento)
+	//
+	// É fixture DESTE pacote, e não do corpus dourado: o corpus saiu do
+	// repositório junto com o ferramental de paridade, e sem um PDF aqui este
+	// teste passaria a PULAR em silêncio — o que é o mesmo que não existir,
+	// justamente para o defeito mais caro já encontrado no projeto.
+	caminho := filepath.Join("testdata", "diario-com-hifen.pdf")
 
-	conteudo, err := os.ReadFile(caminho) //nolint:gosec // caminho fixo, dentro do repositório
+	conteudo, err := os.ReadFile(caminho) //nolint:gosec // caminho fixo, dentro do pacote
 	if err != nil {
-		t.Skipf("corpus indisponível (%v) — gere com `make corpus`", err)
+		t.Fatalf("fixture ausente: %v", err)
 	}
 
 	ctx := context.Background()

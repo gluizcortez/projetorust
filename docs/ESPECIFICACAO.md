@@ -36,8 +36,25 @@ O endereço é `{SERVIDOR_IP}:{SERVIDOR_PORTA}` (`main.rs:50`).
 
 | Variável | Padrão | Comportamento na leitura |
 |---|---|---|
-| `SERVIDOR_IP` | `192.168.42.1` (`main.rs:24`) | `unwrap_or` — qualquer valor é aceito sem validação (`main.rs:44`) |
+| `SERVIDOR_IP` | `192.168.42.1` (`main.rs:24`) — **o porte usa `0.0.0.0`, ver abaixo** | `unwrap_or` — qualquer valor é aceito sem validação (`main.rs:44`) |
 | `SERVIDOR_PORTA` | `6001` (`main.rs:25`) | `unwrap_or_default().parse::<u16>().unwrap_or(6001)` (`main.rs:45–48`) |
+
+> **DIVERGÊNCIA DELIBERADA — endereço de escuta.**
+>
+> O porte usa `0.0.0.0` como padrão. `192.168.42.1` só existe na rede em que o
+> serviço original rodava: numa máquina de desenvolvimento ou dentro de um
+> contêiner, ligar nele falha com *cannot assign requested address* e o processo
+> não sobe.
+>
+> `0.0.0.0` é um **superconjunto** — atende em todas as interfaces, inclusive na
+> `192.168.42.1` quando ela existe. Nenhuma requisição que chegava ao serviço
+> antes deixa de chegar; o que muda é que ele também atende nas demais.
+> `SERVIDOR_IP=192.168.42.1` restaura o comportamento exato do legado, e a
+> constante `config.ServidorIPDoLegado` guarda o valor.
+>
+> **Credencial.** `API_KEY` também ganhou padrão, com o MESMO valor que o legado
+> trazia como constante no código-fonte (`main.rs:26`). O legado não lia essa
+> variável; o porte lê, e sem ela usa aquele valor. Ver `config.APIKeyPadrao`.
 
 Consequências de `SERVIDOR_PORTA`, todas **`DEFEITO PRESERVADO`**:
 

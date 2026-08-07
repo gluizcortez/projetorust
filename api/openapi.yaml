@@ -56,8 +56,10 @@ servers:
     description: Instância do serviço
     variables:
       host:
-        default: "192.168.42.1"
-        description: SERVIDOR_IP
+        default: "localhost"
+        description: >-
+          SERVIDOR_IP. O serviço liga em 0.0.0.0 por padrão, então atende em
+          qualquer endereço da máquina.
       porta:
         default: "6001"
         description: SERVIDOR_PORTA
@@ -332,6 +334,12 @@ components:
       name: X-API-KEY
       description: |
         Credencial fixa, comparada em tempo constante.
+
+        Sem a variável `API_KEY`, vale o padrão
+        `01956cb2-2f85-7440-9767-1a6651c10e0f` — o mesmo valor que o serviço
+        original trazia como constante no código-fonte, e o que
+        `docker-compose.yml` declara. **Para uma implantação real, defina
+        `API_KEY` no ambiente.**
 
         O nome do cabeçalho é insensível a maiúsculas. Cabeçalho REPETIDO usa o
         primeiro valor. Cabeçalho presente e VAZIO conta como inválido, não

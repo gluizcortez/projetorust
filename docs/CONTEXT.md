@@ -1944,3 +1944,84 @@ Nenhuma dependência nova.
 4. **INV-P10** continua sem exercício (herdado da F5).
 5. A F13 **não pode começar** enquanto o portão não fechar: é a definição de
    portão.
+
+---
+
+## Enxugamento do repositório — depois da F12
+
+**Pedido.** Três coisas: que rodar local não dependa de preparo, que a API KEY
+fique fixa como era no Rust, e que saia do repositório tudo o que não é
+necessário para o serviço funcionar — mantendo a documentação.
+
+### O que saiu
+
+`reference/`, `tools/` inteiro (captura de corpus, oráculos em Rust, sonda HTTP,
+comparador, sombra, geradores) e `test/` inteiro (corpus dourado, oráculos,
+paridade, ponta a ponta, carga). Também o job de paridade do CI e os alvos
+`parity`, `oraculos`, `corpus`, `sonda-http`, `load-test` e `chaos-test`.
+
+Tudo está no commit **`2febb7a`** e volta com
+`git checkout 2febb7a -- test tools reference`.
+
+### O que foi PRESERVADO da remoção, e por quê
+
+**Os testes unitários de `internal/`.** Não foram removidos: rodam com
+`go test ./...` sem insumo externo, e são a única rede de segurança que sobra
+para quem mexer no serviço depois. Apagá-los é o único item da limpeza difícil
+de desfazer — e é um comando, se for o desejado.
+
+**Seis PDFs, como fixture de pacote.** `internal/adapter/pdftext/testdata/`
+(cinco) e `internal/app/testdata/` (um). Sem eles, dois testes passariam a
+PULAR em silêncio — incluindo `TestExtratorDeProducaoNormaliza`, que é o guarda
+do defeito mais caro já encontrado no projeto. Um teste que pula não protege
+nada.
+
+**A verificação byte a byte das sete consultas literais.** Ela comparava com
+`reference/main.rs` e passou a comparar com **resumos SHA-256 congelados**
+(`somaDaConsulta`). O oráculo mudou; a propriedade protegida — nenhuma consulta
+pode ser reescrita, reformatada ou "otimizada" — continua exatamente a mesma.
+Uma mensagem de falha aponta para `git show 2febb7a:reference/main.rs`.
+
+### Três mudanças de comportamento, todas para destravar a execução local
+
+| Antes | Agora | Por quê |
+|---|---|---|
+| `SERVIDOR_IP` padrão `192.168.42.1` | `0.0.0.0` | Aquele endereço só existe na rede do serviço original; fora dela o processo NÃO SOBE. `0.0.0.0` é superconjunto — atende também nele quando existe. `config.ServidorIPDoLegado` guarda o valor, e `SERVIDOR_IP` o restaura. |
+| `API_KEY` obrigatória | padrão `01956cb2-…` | É o MESMO valor que o Rust trazia em `const API_KEY`. Lá era constante de código; aqui é padrão, e o ambiente vence. |
+| `DATABASE_URL` obrigatória | padrão local | Aponta para o banco do `docker-compose.yml`. Fora dali falha ruidosamente no arranque — não causa dano silencioso. |
+
+As duas últimas contrariam a invariante do projeto "nenhum segredo tem padrão
+embutido em código", e isso foi **decisão explícita**: o pedido era reproduzir o
+que o Rust fazia. O `gosec` sinaliza as duas com G101 e a supressão fica ao lado
+da constante, com a justificativa — a decisão está registrada num lugar só, não
+espalhada.
+
+**A chave está em claro no repositório.** Não é regressão em relação ao
+original, que a embutia no binário, mas também não vira segredo por estar num
+YAML. `README.md`, `docker-compose.yml`, `config.APIKeyPadrao`, `OPERACAO.md`
+§1.1 e `api/openapi.yaml` dizem isso, nos cinco lugares onde alguém pode
+tropeçar nela.
+
+### Execução local, verificada
+
+Com o binário rodando sem NENHUMA variável definida além do endereço do banco de
+teste deste ambiente:
+
+```
+GET  /ping                    → 200 "pong"
+POST /pdf  com a chave padrão → 200 "PDF carregado com sucesso"
+POST /pdf  sem chave          → 401 "Faltou a X-API-KEY"
+banco: importação 2, status 5, total_recortes 1
+       recorte: página 2, perfil 7, "ALFA CONSTRUCOES", texto normalizado
+```
+
+O `docker-compose.yml` sobe PostgreSQL e serviço juntos; `db/init/` cria o
+esquema (o INFERIDO — D-13 segue aberta, e o arquivo diz isso em letras
+grandes) e semeia os perfis que casam com `exemplos/diario-de-exemplo.pdf`.
+
+### Pendência
+
+`docker compose up` **não foi executado** — este ambiente não tem daemon Docker.
+O que foi verificado é o binário rodando direto contra PostgreSQL local, que
+exercita o mesmo código. O compose é a mesma configuração declarada de outra
+forma, mas isso não é o mesmo que tê-lo visto subir.

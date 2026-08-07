@@ -26,6 +26,11 @@ de busca.
 
 ## 2. Tabela de chaves
 
+> Os testes nomeados na última coluna vivem em `internal/`, exceto os de
+> paridade — `TestPropriedadeDoLaco`, `TestIntegracaoLote…` e afins —, que
+> saíram do repositório junto com o corpus dourado e estão no commit
+> `2febb7a`. Ver `docs/RELATORIO-PARIDADE.md`.
+
 | Chave | Padrão | O que muda quando ligada | Como se prova que desligada não muda nada |
 |---|---|---|---|
 | `MAX_IMPORTACOES_CONCORRENTES` | `0` (sem teto) | Semáforo no executor. Acima do teto a submissão **enfileira**; a resposta HTTP não muda. Alimenta as métricas de fila. | `TestSemTetoNaoProduzAmostraDeEspera`: sem teto, nenhuma amostra de espera e fila sempre zero. |

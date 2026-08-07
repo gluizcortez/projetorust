@@ -16,7 +16,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration load-test chaos-test sonda-http oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test subir descer pg-subir pg-descer test-integration build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
 ci: guarda-toolchain tidy-check lint test build
@@ -28,6 +28,17 @@ lint:
 ## test: testes unitários, com detector de corrida e ordem embaralhada
 test:
 	go test ./... -race -shuffle=on -coverprofile=coverage.out -covermode=atomic
+
+## subir: sobe o serviço e o banco com docker compose
+##   Nada precisa ser definido antes: docker-compose.yml traz todos os valores,
+##   inclusive a API KEY. O serviço fica em http://localhost:6001.
+subir:
+	docker compose up --build -d
+	@echo "serviço em http://localhost:6001 — teste com:  curl localhost:6001/ping"
+
+## descer: derruba o serviço e o banco, preservando os dados
+descer:
+	docker compose down
 
 ## pg-subir: sobe um PostgreSQL local para os testes de integração
 ##   Não usa testcontainers: este ambiente não tem daemon Docker. Ver o
@@ -61,70 +72,12 @@ pg-descer:
 ##   mensagem explicativa em vez de falharem.
 # -p 1 serializa os PACOTES. Sem isso, `internal/adapter/postgres` — que faz
 # `DROP SCHEMA recorte CASCADE` a cada teste — roda em paralelo com
-# `internal/app` e `test/e2e`, que consultam as mesmas tabelas no MESMO banco.
-# A janela é curta e a falha, intermitente: o sintoma é um 500 onde o teste
-# espera 404. Um banco por pacote seria a alternativa; serializar custa alguns
-# segundos e não exige infraestrutura nova.
+# `internal/app`, que consulta as mesmas tabelas no MESMO banco. A janela é
+# curta e a falha, intermitente: o sintoma é um 500 onde o teste espera 404.
+# Um banco por pacote seria a alternativa; serializar custa alguns segundos e
+# não exige infraestrutura nova.
 test-integration: pg-subir
-	go test ./... -race -tags=integration -p 1 -run 'Integration|Integracao|CicloDeVida' -v
-
-## sonda-http: mede o contrato HTTP do legado reconstruindo o roteador do Salvo
-##   Resolveu D-07, D-08 e D-10. Reexecutar quando a versão do Salvo de
-##   produção for conhecida (D-15).
-sonda-http:
-	cargo run --release --manifest-path tools/sonda-http/Cargo.toml
-
-## oraculos: compila os binários em Rust que os testes de propriedade consultam
-##   São OPCIONAIS: sem eles os testes de propriedade são pulados com mensagem
-##   explicativa, e os testes contra o corpus dourado seguem rodando.
-oraculos:
-	cargo build --release --manifest-path tools/capturar-corpus/Cargo.toml \
-		--bin capturar-corpus --bin oraculo-normalizacao --bin oraculo-extended \
-		--bin oraculo-laco
-
-## corpus: regenera o corpus sintético e recaptura o comportamento do legado
-corpus:
-	python3 tools/gerar-corpus-sintetico/gerar.py test/testdata/corpus
-	cargo run --release --manifest-path tools/capturar-corpus/Cargo.toml \
-		--bin capturar-corpus -- test/testdata/corpus test/testdata/expected
-
-## parity: comparação contra o corpus dourado capturado do legado
-#
-# Duas coisas, nesta ordem: a suíte de paridade — que é onde uma divergência
-# aparece com contexto de teste — e o COMPARADOR, que produz o relatório das
-# cinco camadas em texto e em JSON.
-#
-# O comparador é COMPILADO, não executado com `go run`: `go run` engole o
-# código de saída do programa e devolve 1 para qualquer valor diferente de
-# zero, o que apagaria a distinção entre "reprovado" (1) e "não consegui
-# medir" (2) — que é justamente o que a integração contínua precisa separar.
-parity:
-	@if [ ! -d test/testdata/expected ]; then \
-		echo "corpus ausente. Gere com:  make corpus"; \
-		exit 1; \
-	fi
-	go test ./test/parity/... -v
-	@mkdir -p build
-	go build -o build/comparador ./tools/comparador/cmd/comparador
-	./build/comparador -corpus test/testdata/corpus -esperado test/testdata/expected \
-		-json build/paridade.json
-
-## load-test: carga com o dobro do pico histórico e medição de memória
-#
-# Marcador de compilação próprio: estes testes rodam por dezenas de segundos e
-# não podem entrar na suíte de todo dia.
-#
-# PICO_HISTORICO_POR_HORA sobrescreve a suposição do teste. O valor real é a
-# decisão aberta D-04 — sem ela, "o dobro do pico" é o dobro de um palpite.
-load-test:
-	go test -tags=carga ./test/carga/... -v -count=1 -timeout 30m
-
-## chaos-test: mata o processo no meio de importações e confere o banco
-#
-# Precisa de PostgreSQL e do binário: compila, submete um documento, espera o
-# estágio e envia SIGKILL. Ver test/e2e/caos_test.go.
-chaos-test: pg-subir
-	go test -tags=integration ./test/e2e/... -run TestCaos -v -count=1 -timeout 15m
+	go test ./... -race -tags=integration -p 1 -run 'Integration|Integracao' -v
 
 ## build: compila o binário em bin/
 build:

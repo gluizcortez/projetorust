@@ -2,6 +2,28 @@
 
 **Fase F12** · portão do projeto · gerado em **2026-08-07**
 
+> ### O ferramental descrito aqui NÃO está mais na árvore de trabalho
+>
+> Depois desta fase, o repositório foi enxugado para conter apenas o que o
+> serviço precisa para rodar. Saíram: a referência em Rust, o corpus dourado e
+> seus oráculos, `test/parity`, `test/e2e`, `test/carga`, `tools/comparador`,
+> `tools/sombra` e todo o ferramental de captura.
+>
+> **Nada disso foi perdido** — está no histórico do git, no commit `2febb7a`:
+>
+> ```sh
+> git show 2febb7a --stat            # o que existia
+> git checkout 2febb7a -- test tools reference   # traz tudo de volta
+> ```
+>
+> Os comandos citados neste relatório (`make parity`, `make load-test`,
+> `make chaos-test`) só funcionam depois disso. Os **números** permanecem
+> válidos: eles descrevem uma medição que aconteceu, sobre um código que
+> continua no repositório.
+>
+> A recomendação abaixo **não muda** com a remoção: ela depende de D-11, D-15 e
+> D-14, e nenhuma delas foi respondida.
+
 ---
 
 ## Recomendação
