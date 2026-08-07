@@ -27,20 +27,27 @@ import (
 // espaço e aplica a de-hifenização própria do MuPDF, o que quebra a junção de
 // hífens do legado (INV-P02) e a busca de frase (INV-P05). Medido: 20 de 154
 // páginas contra 159 de 159.
-// ESCOPO DESTA FASE. O Extrator devolve o texto BRUTO — antes da junção de
-// hífens e da remoção de diacríticos. Essas duas transformações são a fase F6
-// e entram como um DECORADOR sobre este tipo, não como um passo escondido
-// aqui: separá-las é o que torna uma falha de extração distinguível de uma de
-// normalização, tanto no diagnóstico quanto no corpus (`*.paginas-brutas.json`
-// contra `*.paginas.json`).
+// O Extrator devolve o texto BRUTO — antes da junção de hífens e da remoção de
+// diacríticos. Essas duas transformações são a fase F6 e entram como um
+// DECORADOR sobre este tipo, não como um passo escondido aqui: separá-las é o
+// que torna uma falha de extração distinguível de uma de normalização, tanto no
+// diagnóstico quanto no corpus (`*.paginas-brutas.json` contra `*.paginas.json`).
 //
-// Enquanto a F6 não entrar, quem satisfaz domain.ExtratorTexto por completo é
-// este tipo sem normalização, o que está registrado em docs/CONTEXT.md.
+// # ESTE TIPO NÃO É O DE PRODUÇÃO
+//
+// Quem satisfaz `domain.ExtratorTexto` por completo — que promete texto JÁ
+// NORMALIZADO — é `ExtratorNormalizado`, e é ele que a raiz de composição
+// injeta. Este aqui é um ESTÁGIO, usado pelo teste de paridade da extração.
+//
+// A afirmação `var _ domain.ExtratorTexto = (*Extrator)(nil)` foi REMOVIDA de
+// propósito: ela dizia que o extrator cru cumpre um contrato que ele não
+// cumpre, e foi o que permitiu à raiz de composição injetá-lo por engano
+// durante seis fases. Ver o cabeçalho de decorador.go.
 type Extrator struct{}
 
-var _ domain.ExtratorTexto = (*Extrator)(nil)
-
-// NovoExtrator cria o extrator de texto bruto.
+// NovoExtrator cria o extrator de texto BRUTO.
+//
+// Para produção, use NovoExtratorNormalizado.
 func NovoExtrator() *Extrator {
 	return &Extrator{}
 }

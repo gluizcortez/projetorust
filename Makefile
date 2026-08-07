@@ -16,7 +16,7 @@ export CGO_ENABLED := 1
 
 LDFLAGS := -s -w -X main.versao=$(VERSAO) -X main.revisao=$(REVISAO)
 
-.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration sonda-http oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
+.PHONY: ci guarda-toolchain lint test pg-subir pg-descer test-integration load-test chaos-test sonda-http oraculos corpus parity build docker generate tidy tidy-check cobertura limpar ajuda
 
 ## ci: verificação completa — é o que a integração contínua executa
 ci: guarda-toolchain tidy-check lint test build
@@ -79,7 +79,8 @@ sonda-http:
 ##   explicativa, e os testes contra o corpus dourado seguem rodando.
 oraculos:
 	cargo build --release --manifest-path tools/capturar-corpus/Cargo.toml \
-		--bin capturar-corpus --bin oraculo-normalizacao --bin oraculo-extended
+		--bin capturar-corpus --bin oraculo-normalizacao --bin oraculo-extended \
+		--bin oraculo-laco
 
 ## corpus: regenera o corpus sintético e recaptura o comportamento do legado
 corpus:
@@ -88,12 +89,42 @@ corpus:
 		--bin capturar-corpus -- test/testdata/corpus test/testdata/expected
 
 ## parity: comparação contra o corpus dourado capturado do legado
+#
+# Duas coisas, nesta ordem: a suíte de paridade — que é onde uma divergência
+# aparece com contexto de teste — e o COMPARADOR, que produz o relatório das
+# cinco camadas em texto e em JSON.
+#
+# O comparador é COMPILADO, não executado com `go run`: `go run` engole o
+# código de saída do programa e devolve 1 para qualquer valor diferente de
+# zero, o que apagaria a distinção entre "reprovado" (1) e "não consegui
+# medir" (2) — que é justamente o que a integração contínua precisa separar.
 parity:
 	@if [ ! -d test/testdata/expected ]; then \
 		echo "corpus ausente. Gere com:  make corpus"; \
 		exit 1; \
 	fi
 	go test ./test/parity/... -v
+	@mkdir -p build
+	go build -o build/comparador ./tools/comparador/cmd/comparador
+	./build/comparador -corpus test/testdata/corpus -esperado test/testdata/expected \
+		-json build/paridade.json
+
+## load-test: carga com o dobro do pico histórico e medição de memória
+#
+# Marcador de compilação próprio: estes testes rodam por dezenas de segundos e
+# não podem entrar na suíte de todo dia.
+#
+# PICO_HISTORICO_POR_HORA sobrescreve a suposição do teste. O valor real é a
+# decisão aberta D-04 — sem ela, "o dobro do pico" é o dobro de um palpite.
+load-test:
+	go test -tags=carga ./test/carga/... -v -count=1 -timeout 30m
+
+## chaos-test: mata o processo no meio de importações e confere o banco
+#
+# Precisa de PostgreSQL e do binário: compila, submete um documento, espera o
+# estágio e envia SIGKILL. Ver test/e2e/caos_test.go.
+chaos-test: pg-subir
+	go test -tags=integration ./test/e2e/... -run TestCaos -v -count=1 -timeout 15m
 
 ## build: compila o binário em bin/
 build:

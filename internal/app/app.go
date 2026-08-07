@@ -198,7 +198,7 @@ func Novo(
 	consultas := postgres.NovoRepositorioConsulta(pool)
 
 	// 9 e 10 — extração e índice.
-	extrator := pdftext.NovoExtrator()
+	extrator := extratorDeProducao()
 	indexador := searchidx.NovoIndexador()
 
 	// 11 — pipeline de segundo plano.
@@ -527,6 +527,26 @@ func forcado(forcar <-chan struct{}) bool {
 // -------------------------------------------------------------------------
 // Adaptadores que só a raiz de composição precisa
 // -------------------------------------------------------------------------
+
+// extratorDeProducao devolve o extrator que o serviço usa de verdade.
+//
+// É uma função NOMEADA, e não uma chamada embutida em Novo, para que exista um
+// alvo de teste: `TestExtratorDeProducaoNormaliza` prova que ela normaliza, e
+// esse teste é a única coisa que impede a regressão descrita abaixo.
+//
+// # A regressão que isto guarda
+//
+// Até a fase F12 a raiz de composição injetava `pdftext.NovoExtrator()`, que
+// devolve texto BRUTO. O serviço indexava sem junção de hífens e sem remoção de
+// diacríticos, e `pdftext.Normalizar` era código morto em produção — durante
+// seis fases, com toda a suíte verde.
+//
+// Nenhum teste pegava porque cada camada se alimentava do ORÁCULO em vez da
+// saída da camada anterior em Go. A costura era o ponto cego. Ver
+// pdftext/decorador.go e test/parity/pipeline_test.go.
+func extratorDeProducao() domain.ExtratorTexto {
+	return pdftext.NovoExtratorNormalizado()
+}
 
 // relogioDoSistema é o domain.Relogio de produção.
 //

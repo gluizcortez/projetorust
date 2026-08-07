@@ -16,6 +16,7 @@ atrás de chave de configuração desligada por padrão.
 | `docs/MAPA-DE-CHAMADAS.md` | Grafo de chamadas do legado e achados estruturais |
 | `docs/CONTEXT.md` | Memória do projeto entre fases — decisões, desvios, pendências |
 | `docs/OPERACAO.md` | Guia de operação: tabela de chaves, ordem de ativação, valores por porte de carga, métricas e alarmes |
+| `docs/RELATORIO-PARIDADE.md` | Evidência da fase F12 e a recomendação explícita sobre o corte |
 | `api/openapi.yaml` | Contrato da API, com as adições opcionais marcadas por `x-chave` |
 | `reference/main.rs` | Implementação Rust de referência (normativa) |
 | `tools/` | Ferramental de apoio: captura de corpus, corpus sintético e sondas do comportamento do legado |
@@ -38,7 +39,7 @@ atrás de chave de configuração desligada por padrão.
 | F9 | Camada HTTP | **concluída** — contrato byte a byte; D-07, D-08 e D-10 resolvidas por medição |
 | F10 | Ciclo de vida e drenagem | **concluída** — sinais reais, drenagem por notificação, códigos de saída |
 | F11 | Evoluções técnicas atrás de chaves | **concluída** — dez chaves, todas desligadas por padrão; D-21 aberta |
-| F12 | Paridade e execução em sombra | pendente |
+| F12 | Paridade e execução em sombra | **parcial** — verificação determinística completa e aprovada; sombra bloqueada por D-14. Recomendação: **não cortar** |
 | F13 | Corte e descomissionamento | pendente |
 
 ## Antes de continuar

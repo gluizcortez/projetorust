@@ -5,6 +5,10 @@ edition = "2021"
 description = "Captura o comportamento do serviço legado como corpus dourado de paridade (fase F0)."
 publish = false
 
+[lib]
+name = "capturar_corpus"
+path = "src/lib.rs"
+
 [[bin]]
 name = "capturar-corpus"
 path = "src/main.rs"

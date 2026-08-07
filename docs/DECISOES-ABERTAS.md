@@ -16,18 +16,18 @@
 | D-01 | Existe perfil com `id_perfil = 0`? | — | **resolvida na F8** · sentinela explícito | operação |
 | D-02 | Qual o `COLLATE` do banco? | F4, F8 | aberta | operação |
 | D-03 | Quais as versões exatas de `tantivy`, `mupdf` e `diacritics`? | **F6, F7** | parcial · limite **medido** | quem mantém o Rust |
-| D-04 | Qual o maior PDF e o maior número de recortes já processados? | F11, F12 | aberta | operação |
+| D-04 | Qual o maior PDF e o maior número de recortes já processados? | F11, F12 | aberta · régua de memória **medida e não confirmada** na F12 | operação |
 | D-05 | Existem expressões com `"` cadastradas? | — | aberta · **padrão provisório implementado na F8** | operação |
 | D-06 | O que fazer com padrão de `&` que não compila? | F11 | aberta · **padrão provisório implementado na F8** | arquitetura |
 | D-07 | Reproduzir ou remover o ramo morto de `main.rs:226–230`? | — | **resolvida na F9** · inalcançável, não portado | arquitetura |
 | D-08 | Qual a resposta para rota inexistente e método não permitido? | — | **RESOLVIDA na F9** · medida | captura empírica |
 | D-09 | Manter a distinção entre 401 "ausente" e 401 "inválida"? | F9 | **decidida** | arquitetura |
 | D-10 | Qual o `Content-Type` exato de cada resposta? | — | **RESOLVIDA na F9** · medida | captura empírica |
-| D-11 | Corpus de PDFs reais e *dump* de perfis | **F5, F6, F7, F12** | aberta · **BLOQUEANTE** | operação |
+| D-11 | Corpus de PDFs reais e *dump* de perfis | **F5, F6, F7, F12, F13** | aberta · **BLOQUEANTE — barra o corte** | operação |
 | D-12 | O `search_path` é assumido em algum lugar? | F4 | aberta | operação |
 | D-13 | Qual o esquema real das sete tabelas? | F4 | aberta | operação |
-| D-14 | A infraestrutura permite espelhar tráfego? | F12 | aberta | infraestrutura |
-| D-15 | Onde estão o `Cargo.toml` e o `Cargo.lock` originais? | **F0, F6** | aberta · **BLOQUEANTE** | quem mantém o Rust |
+| D-14 | A infraestrutura permite espelhar tráfego? | **F12, F13** | aberta · **BLOQUEANTE — sem ela não há sombra** | infraestrutura |
+| D-15 | Onde estão o `Cargo.toml` e o `Cargo.lock` originais? | **F0, F6, F13** | aberta · **BLOQUEANTE — o oráculo é condicional** | quem mantém o Rust |
 | D-16 | Qual o limite prático de resposta para `MAX_UPLOAD_BYTES`? | F11 | **implementada na F11** · opção B | produto |
 | D-17 | Quantos perfis têm expressões acentuadas (hoje inertes)? | — | aberta · **escalar a produto** | produto |
 | D-18 | PDFs truncados chegam em produção? | — | aberta · **escalar a produto** | operação |

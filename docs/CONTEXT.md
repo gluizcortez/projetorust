@@ -1812,3 +1812,135 @@ Nenhuma dependência nova.
    nenhuma importação falha é recuperável.
 5. **D-05**, **D-06**, **D-13**, **D-14**, **D-18**, **D-20**: abertas.
 6. **INV-P10** continua sem exercício (herdado da F5).
+
+---
+
+## F12 — Verificação de paridade e execução em sombra
+
+**Objetivo.** Provar equivalência com evidência, não com confiança. É o portão
+do projeto.
+
+**Resultado.** A verificação determinística passou — depois de encontrar e
+corrigir **dois defeitos graves**. A execução em sombra **não aconteceu**: o
+insumo é D-14, e ele nunca chegou. A recomendação registrada em
+`docs/RELATORIO-PARIDADE.md` é **não cortar**.
+
+### Os dois defeitos, e por que seis fases não os pegaram
+
+**1. A normalização não era aplicada em produção.** A raiz de composição
+injetava `pdftext.NovoExtrator()`, que devolve texto BRUTO. O serviço indexava
+sem junção de hífens e sem remoção de diacríticos, e `pdftext.Normalizar` — com
+um milhão de casos de teste de propriedade na F6 — era **código morto no
+caminho de produção**. INV-P02 e INV-P07 quebrados; INV-P19 **invertida**.
+
+Cinco dos 28 documentos do corpus divergiam.
+
+**2. O termo longo não deixava buraco na numeração de posições.** No Tantivy a
+posição é do tokenizador e o descarte por comprimento é um filtro posterior que
+não renumera. O porte numerava pela lista já filtrada, então a frase casava por
+cima do termo longo — encontrando ocorrências que o legado nunca encontrou.
+
+**A causa comum é estrutural, e é a lição da fase.** Cada teste de camada se
+alimentava do ORÁCULO da anterior, nunca da saída da anterior em Go:
+
+```
+F5  extração                      → compara com paginas-brutas.json
+F6  normaliza o ORÁCULO bruto     → compara com paginas.json
+F7  busca sobre o ORÁCULO         → compara com busca.json
+```
+
+O isolamento é correto — ele localiza a causa —, mas deixa a **costura** sem
+cobertura. E o oráculo `recortes.json`, que mede o pipeline inteiro, existia
+desde a **F0** e **nenhum teste o consumia**.
+
+Um conjunto de testes de unidade todos verdes não diz nada sobre a montagem.
+
+### O que foi construído
+
+| Artefato | O que faz |
+|---|---|
+| `test/parity/pipeline_test.go` | camadas 4 e 5 — o pipeline REAL contra `recortes.json`; foi o teste que expôs o defeito 1 |
+| `tools/comparador` | comparador das cinco camadas, relatório em texto e JSON, redução automática ao menor caso |
+| `tools/capturar-corpus` (lib + `oraculo-laco`) | o crate ganhou `lib.rs` para que o oráculo do laço reuse os portes verbatim em vez de duplicá-los |
+| `test/parity/propriedade_laco_test.go` | 10.000 documentos gerados contra o oráculo do laço; expôs o defeito 2 |
+| `test/e2e/caos_test.go` | SIGKILL por estágio, queda do banco, morte durante a drenagem |
+| `test/carga/carga_test.go` | correção sob concorrência e memória por importação |
+| `tools/sombra` | comparador de dois bancos e verificação de isolamento |
+| `docs/RELATORIO-PARIDADE.md` | a evidência e a recomendação |
+| `app.extratorDeProducao` | função nomeada só para existir alvo de teste da MONTAGEM |
+
+### Decisões de desenho que merecem registro
+
+**O portão olha só as camadas 4 e 5.** Uma diferença de termo que não chega a
+mudar recorte não altera o conteúdo do banco. As camadas 1 a 3 localizam a
+causa; barrar por elas confundiria sintoma com consequência.
+
+**O comparador tem três códigos de saída, não dois.** `2` é "não consegui
+medir". Sem essa distinção, um corpus que deixou de ser gerado passaria por
+"sem divergência" — e `go run` não serve para invocá-lo, porque engole o código
+e devolve 1 para qualquer valor não nulo.
+
+**Na sombra, divergência de TEMPO não reprova.** As duas instâncias processam o
+mesmo documento em momentos diferentes por construção; reprovar por isso
+reprovaria toda execução e tornaria o portão inútil.
+
+**A verificação de isolamento TENTA escrever.** Uma restrição que ninguém
+verifica é uma intenção. E tenta dentro de transação revertida, para não causar
+o dano que procura.
+
+**O teste de caos lê o estado ANTES do SIGKILL.** Se a drenagem concluiu a
+importação nos milissegundos anteriores, o status 5 é correto e não há morte
+súbita a medir. Sem essa guarda o teste acusaria defeito onde houve corrida.
+
+### O que foi medido e contradisse a documentação
+
+`docs/OPERACAO.md` §5 usa a régua de **8× o tamanho do PDF** para memória por
+importação. O medido foi **14,3×**. O documento do corpus tem ~100 KiB e o custo
+FIXO por importação domina nessa escala, então o número não se transfere para um
+diário real — **mas isso não valida os 8×**. A régua ficou marcada como
+provisória em `OPERACAO.md`, com remedição pendente de D-11.
+
+### As sabotagens que provaram os testes
+
+| Sabotagem | Quem pegou |
+|---|---|
+| Raiz de composição volta ao extrator cru | `TestExtratorDeProducaoNormaliza` |
+| Índice volta a numerar pela lista filtrada | `TestPropriedadeDoLaco` — 19 de 9.357 casos |
+| Comparador aponta para o extrator cru | o próprio relatório, com classe e caso mínimo |
+
+### Desvios do enunciado, declarados
+
+**O caos não afirma que a queda do banco leva a −1.** O legado descarta o erro
+das gravações de status com `let _ =` (ESPECIFICACAO §3.6); o −1 vem da falha na
+LEITURA das chaves. Derrubar as conexões atinge as duas e qual falha primeiro
+depende do instante. O teste afirma o que observa: o processo **sobrevive**.
+
+**"O dobro do pico histórico" pressupõe o pico**, que é D-04 e nunca foi
+respondido. O teste usa 500/h como suposição NOMEADA, sobrescritível por
+`PICO_HISTORICO_POR_HORA`.
+
+**A latência p99 comparada ao legado não foi medida** — exige os dois serviços
+lado a lado em produção.
+
+### Medições
+
+```
+make parity                                    APROVADO, 5 camadas, 0 divergência
+go test ./test/parity/... -run TestPropriedade 9.357 casos, 0 divergência
+make load-test                                 64 simultâneas, 0 divergência
+make chaos-test                                todos os cenários equivalentes ao legado
+make lint                                      0 issues
+golangci-lint --build-tags=carga,integration   0 issues
+```
+
+Nenhuma dependência nova.
+
+### Pendências que entram na F13
+
+1. **D-11**, **D-15**, **D-14** — os três insumos que bloqueiam o corte. Nenhum
+   é trabalho de engenharia.
+2. **D-04** — a régua de memória segue sem validação em documento real.
+3. **D-13**, **D-02** — esquema real e `COLLATE`.
+4. **INV-P10** continua sem exercício (herdado da F5).
+5. A F13 **não pode começar** enquanto o portão não fechar: é a definição de
+   portão.

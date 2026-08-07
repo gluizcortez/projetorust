@@ -213,6 +213,32 @@ analisador é aplicado à consulta pelo `QueryParser`.
    são **removidos do fluxo**, não truncados. O limite é medido em **bytes**.
 3. **Minúsculas.**
 
+**O termo descartado DEIXA UM BURACO na numeração de posições.** Esta é a parte
+da invariante que faltava, acrescentada na fase **F12** depois de o teste de
+propriedade do laço encontrar a divergência.
+
+No Tantivy, a posição é atribuída pelo **tokenizador** (estágio 1); o descarte
+por comprimento é um **filtro** que roda depois e **não renumera** o que sobra.
+Em `alfa <termo-de-40-bytes> beta`, `alfa` fica na posição 0 e `beta` na 2 — e a
+busca de frase `"alfa beta"`, que exige posições consecutivas, **NÃO casa**.
+
+A regra vale nos dois lados: o mesmo analisador roda sobre a consulta, então um
+termo longo no meio da EXPRESSÃO também deixa buraco, e a frase passa a exigir a
+mesma distância no documento.
+
+| Texto da página | Expressão | Casa? |
+|---|---|---|
+| `alfa beta` | `alfa beta` | sim — posições 0 e 1 |
+| `alfa <40 bytes> beta` | `alfa beta` | **não** — posições 0 e 2 |
+| `alfa <40 bytes> beta` | `alfa <40 bytes> beta` | sim — buraco dos dois lados |
+
+**Como um porte ingênuo quebraria.** Numerando as posições pelo índice na lista
+JÁ FILTRADA, `beta` cairia na posição 1 e a frase passaria a casar por cima do
+termo longo — encontrando ocorrências que o serviço atual nunca encontrou. Era
+exatamente o que o porte fazia até a F12, e os 28 documentos do corpus dourado
+não pegavam: nenhum deles tem termo longo ENTRE dois termos de uma expressão
+cadastrada. Quem pegou foi `TestPropriedadeDoLaco`, em 10.000 casos gerados.
+
 **Valor do limite — MEDIDO.** Determinado empiricamente contra **tantivy
 0.22.1** com o corpus sintético (`12-inv-p03-termos-longos.pdf` e
 `12b-inv-p04-bytes-contra-runas.pdf`):

@@ -82,17 +82,20 @@ func (ix *Indexador) Construir(ctx context.Context, paginas []string) (domain.In
 		}
 
 		pagina++
-		termos := Tokenizar(texto)
-		if len(termos) > math.MaxUint32 {
-			return nil, fmt.Errorf("%w: página %d tem %d termos, acima do limite de posição",
-				domain.ErrIndiceIndisponivel, pagina, len(termos))
+		// COM POSIÇÃO: o termo descartado por comprimento deixa um BURACO na
+		// numeração, como no Tantivy. Numerar pelo índice da fatia filtrada
+		// faria a frase casar por cima do termo longo. Ver TokenizarComPosicao.
+		termos := TokenizarComPosicao(texto)
+		if len(termos) > 0 && termos[len(termos)-1].Posicao > math.MaxUint32 {
+			return nil, fmt.Errorf("%w: página %d tem posição %d, acima do limite",
+				domain.ErrIndiceIndisponivel, pagina, termos[len(termos)-1].Posicao)
 		}
 
-		for posicao, termo := range termos {
-			novo.postings[termo] = append(novo.postings[termo], ocorrencia{
+		for _, t := range termos {
+			novo.postings[t.Termo] = append(novo.postings[t.Termo], ocorrencia{
 				pagina: pagina,
-				//nolint:gosec // o limite acima garante que posicao cabe em uint32
-				posicao: uint32(posicao),
+				//nolint:gosec // o limite acima garante que a posição cabe em uint32
+				posicao: uint32(t.Posicao),
 			})
 		}
 	}
@@ -171,8 +174,10 @@ func (ix *indice) Frase(ctx context.Context, expressao string) ([]domain.Recorte
 	}
 
 	// O MESMO tokenizador aplicado ao texto indexado, que é o que o
-	// QueryParser do legado faz com a consulta.
-	termos := Tokenizar(expressao)
+	// QueryParser do legado faz com a consulta — inclusive quanto à POSIÇÃO:
+	// um termo longo NO MEIO DA EXPRESSÃO também deixa buraco, e a frase passa
+	// a exigir a mesma distância no documento.
+	termos := TokenizarComPosicao(expressao)
 	if len(termos) == 0 {
 		return nil, nil
 	}
@@ -202,45 +207,57 @@ func (ix *indice) Frase(ctx context.Context, expressao string) ([]domain.Recorte
 
 // paginasComFrase devolve, em ordem crescente e sem repetição, as páginas em
 // que os termos aparecem em posições consecutivas.
-func (ix *indice) paginasComFrase(termos []string) []uint64 {
+func (ix *indice) paginasComFrase(termos []TermoPosicionado) []uint64 {
 	// Um termo só: as páginas distintas em que ele ocorre.
 	if len(termos) == 1 {
-		return paginasDistintas(ix.postings[termos[0]])
+		return paginasDistintas(ix.postings[termos[0].Termo])
 	}
 
 	// Vários termos: `candidatos` guarda a ocorrência do ÚLTIMO termo já
 	// casado. A cada termo seguinte sobrevivem apenas as continuações na
-	// posição imediatamente após — distância zero, sem tolerância.
+	// distância que a EXPRESSÃO pede — normalmente 1, e maior quando a própria
+	// expressão tem um termo descartado por comprimento no meio.
 	//
 	// A cópia é obrigatória: `avancar` escreve no arranjo que recebe, e o
 	// primeiro deles seria a lista de ocorrências DO PRÓPRIO ÍNDICE, que é
 	// imutável e compartilhada entre buscas concorrentes.
-	candidatos := append([]ocorrencia(nil), ix.postings[termos[0]]...)
+	candidatos := append([]ocorrencia(nil), ix.postings[termos[0].Termo]...)
 	for k := 1; k < len(termos) && len(candidatos) > 0; k++ {
-		candidatos = avancar(candidatos, ix.postings[termos[k]])
+		distancia := termos[k].Posicao - termos[k-1].Posicao
+		if distancia <= 0 || distancia > math.MaxUint32 {
+			// Inalcançável: TokenizarComPosicao emite posições estritamente
+			// crescentes. A guarda evita que uma mudança futura produza um
+			// deslocamento negativo, que faria `avancar` procurar para trás.
+			return nil
+		}
+		candidatos = avancar(candidatos, ix.postings[termos[k].Termo], uint32(distancia)) //nolint:gosec // limite conferido acima
 	}
 
 	return paginasDistintas(candidatos)
 }
 
-// avancar conserva as ocorrências de `atuais` que têm continuação imediata em
-// `seguintes`, devolvendo já a posição avançada.
+// avancar conserva as ocorrências de `atuais` que têm continuação a
+// `distancia` posições em `seguintes`, devolvendo já a posição avançada.
+//
+// `distancia` é 1 no caso comum. Ela é maior quando a EXPRESSÃO tem um termo
+// descartado por comprimento entre dois termos casados: o buraco na numeração
+// da consulta precisa do mesmo buraco no documento.
 //
 // As duas listas chegam ordenadas por (página, posição) e o alvo cresce de
 // forma monótona, então a interseção é uma fusão linear com um único ponteiro
 // que nunca retrocede — não uma busca por elemento, muito menos um produto
 // cartesiano.
-func avancar(atuais, seguintes []ocorrencia) []ocorrencia {
+func avancar(atuais, seguintes []ocorrencia, distancia uint32) []ocorrencia {
 	// Reaproveita o arranjo de entrada, que é uma cópia local: a escrita nunca
 	// ultrapassa a leitura.
 	mantidos := atuais[:0]
 
 	j := 0
 	for _, atual := range atuais {
-		if atual.posicao == math.MaxUint32 {
-			continue // não há posição seguinte nesta página
+		if atual.posicao > math.MaxUint32-distancia {
+			continue // a posição alvo transbordaria
 		}
-		alvo := ocorrencia{pagina: atual.pagina, posicao: atual.posicao + 1}
+		alvo := ocorrencia{pagina: atual.pagina, posicao: atual.posicao + distancia}
 
 		for j < len(seguintes) && seguintes[j].menorQue(alvo) {
 			j++

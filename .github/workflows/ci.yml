@@ -143,6 +143,24 @@ jobs:
       - name: Testes de paridade e de propriedade
         run: go test ./test/parity/... -v
 
+      # O comparador das cinco camadas. Sai com 0 aprovado, 1 reprovado e 2
+      # quando não conseguiu medir — e a distinção entre 1 e 2 é o ponto: um
+      # corpus que deixou de ser gerado não pode passar por "sem divergência".
+      - name: Comparador de paridade — cinco camadas
+        run: |
+          mkdir -p build
+          go build -o build/comparador ./tools/comparador/cmd/comparador
+          ./build/comparador -corpus test/testdata/corpus \
+            -esperado test/testdata/expected -json build/paridade.json
+
+      - name: Relatório de paridade
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-paridade
+          path: build/paridade.json
+          if-no-files-found: warn
+
       # O corpus dourado é versionado. Se recapturá-lo mudar qualquer arquivo, ou
       # o ferramental mudou de comportamento ou a captura não é determinística —
       # as duas coisas invalidam o oráculo.

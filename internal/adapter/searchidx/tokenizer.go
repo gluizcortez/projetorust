@@ -99,3 +99,70 @@ func acrescentar(termos []string, termo string) []string {
 	// Estágio 3 — minúsculas.
 	return append(termos, strings.ToLower(termo))
 }
+
+// TermoPosicionado é um termo sobrevivente com a POSIÇÃO que o Tantivy lhe
+// atribui.
+type TermoPosicionado struct {
+	Termo string
+	// Posicao conta TODOS os termos segmentados, inclusive os descartados por
+	// comprimento, a partir de zero.
+	Posicao int
+}
+
+// TokenizarComPosicao devolve os termos sobreviventes COM a numeração do
+// Tantivy — que conta também os descartados.
+//
+// # Por que a posição não é o índice na fatia de Tokenizar
+//
+// No Tantivy, a posição é atribuída pelo TOKENIZADOR, e o descarte por
+// comprimento é um FILTRO que roda depois. Um termo removido não é
+// renumerado: ele deixa um BURACO. Em `alfa <termo-longo> beta`, `alfa` fica na
+// posição 0 e `beta` na 2 — e a busca de frase `"alfa beta"`, que exige posições
+// consecutivas, NÃO casa.
+//
+// Numerar pelo índice da fatia filtrada colocaria `beta` na posição 1 e a frase
+// passaria a casar. Era o que esta implementação fazia até a fase F12, e o
+// corpus dourado não pegava: nenhum dos 28 documentos tem termo longo ENTRE
+// dois termos de uma expressão. Quem pegou foi o teste de propriedade do laço,
+// em 10.000 casos gerados.
+//
+// Ver docs/INVARIANTES.md, INV-P03.
+func TokenizarComPosicao(s string) []TermoPosicionado {
+	if s == "" {
+		return nil
+	}
+
+	posicionados := make([]TermoPosicionado, 0, len(s)/8+1)
+	posicao := 0
+
+	// A posição é incrementada para TODO termo segmentado; só os sobreviventes
+	// entram na saída.
+	acrescentarPosicionado := func(termo string) {
+		if len(termo) < LimiteComprimentoTermo {
+			posicionados = append(posicionados, TermoPosicionado{
+				Termo:   strings.ToLower(termo),
+				Posicao: posicao,
+			})
+		}
+		posicao++
+	}
+
+	inicio := -1
+	for i, r := range s {
+		if ehAlfanumerico(r) {
+			if inicio < 0 {
+				inicio = i
+			}
+			continue
+		}
+		if inicio >= 0 {
+			acrescentarPosicionado(s[inicio:i])
+			inicio = -1
+		}
+	}
+	if inicio >= 0 {
+		acrescentarPosicionado(s[inicio:])
+	}
+
+	return posicionados
+}

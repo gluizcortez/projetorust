@@ -26,24 +26,16 @@
 //!     --texto MODO    `completo` (padrão) grava o texto integral de cada
 //!                     recorte; `sha256` grava apenas o resumo.
 
-mod extracao;
-mod indice;
-mod laco;
-mod modelo;
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
 
-use modelo::{ChavePesquisa, Desfecho, SaidaBuscas, SaidaPaginas, SaidaRecortes, SaidaTokens};
-
-/// Porte de `reference/main.rs:342-346`.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
-}
+// Os portes verbatim vivem na biblioteca do mesmo pacote, para que
+// `oraculo-laco` os use sem duplicá-los. Ver src/lib.rs.
+use capturar_corpus::modelo::{
+    ChavePesquisa, Desfecho, SaidaBuscas, SaidaPaginas, SaidaRecortes, SaidaTokens,
+};
+use capturar_corpus::{extracao, indice, laco, sha256_hex};
 
 struct Opcoes {
     dir_corpus: PathBuf,

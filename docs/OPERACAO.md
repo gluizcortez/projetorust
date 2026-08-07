@@ -165,11 +165,23 @@ Cada importação em andamento segura, ao mesmo tempo:
 | Índice em memória | ~1× a 2× o texto | Vocabulário mais listas de posições. |
 | Recortes acumulados | nº de recortes × tamanho da página | O texto **integral** de cada página com ocorrência. |
 
-Regra de bolso conservadora:
+Regra de bolso:
 
 ```
 memória por importação ≈ 8 × tamanho do PDF
 ```
+
+> **ESTA RÉGUA NÃO ESTÁ VALIDADA.** A fase F12 mediu **14,3×** sobre o maior
+> documento do corpus (~100 KiB) — quase o dobro. O fator medido não se
+> transfere direto para um diário real, porque sobre um documento pequeno o
+> custo FIXO por importação domina; mas isso não valida os 8×, apenas explica
+> por que a medição não os contradiz de forma conclusiva.
+>
+> **Remedir assim que D-11 entregar documentos reais.** Até lá, trate os 8×
+> como provisório e arredonde o teto de concorrência para baixo com folga: um
+> teto derivado de régua errada é como o processo morre por falta de memória,
+> levando junto todas as importações em andamento. Ver
+> `docs/RELATORIO-PARIDADE.md` §5.3.
 
 Um diário de 30 MiB consome cerca de **240 MiB** no pico. Daí:
 

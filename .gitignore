@@ -4,6 +4,7 @@ target/
 
 # Go
 /bin/
+/build/
 *.test
 coverage.out
 

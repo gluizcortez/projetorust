@@ -75,3 +75,41 @@ pub fn extrair_paginas(conteudo: &[u8]) -> Result<PaginasCapturadas> {
         normalizadas,
     })
 }
+
+/// Aplica a normalização do legado a um texto de página JÁ PAGINADO.
+///
+/// Existe para o teste de propriedade da fase F12, que gera texto sintético em
+/// vez de extraí-lo de um PDF: `extrair_paginas` está amarrada ao MuPDF e não
+/// serve para uma cadeia qualquer.
+///
+/// A reprodução é LINHA A LINHA, exatamente como `main.rs:494-501`: cada linha
+/// é aparada, recebe um `\n`, passa pela junção de hífens e pela remoção de
+/// diacríticos, e só então as linhas são concatenadas SEM separador
+/// (`main.rs:505`).
+///
+/// A junção de hífens REMOVE o `\n` junto com o hífen — é assim que
+/// `conti-\nnuacao` vira `continuacao`: o `$1` engole os dois, e a linha
+/// seguinte encosta na anterior.
+pub fn normalizar_pagina(bruta: &str) -> String {
+    let re_hifen_final_de_linha =
+        regex::Regex::new(r#"(?imx)(\w+)(-\n)"#).expect("Expressão regular para remoção de hífens");
+
+    let mut linhas: Vec<&str> = bruta.split('\n').collect();
+    // O `\n` FINAL da página fecha a última linha; ele não abre uma linha nova.
+    // Sem descartar o pedaço vazio que o `split` deixa, a normalização
+    // acrescentaria um `\n` que o legado não produz — e a página inteira
+    // divergiria por um byte no fim.
+    if linhas.last() == Some(&"") {
+        linhas.pop();
+    }
+
+    linhas
+        .into_iter()
+        .map(|linha| {
+            let chars = format!("{}\n", linha.trim());
+            let chars = re_hifen_final_de_linha.replace_all(&chars, "$1").to_string();
+            diacritics::remove_diacritics(&chars)
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
