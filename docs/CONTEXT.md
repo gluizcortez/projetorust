@@ -2147,3 +2147,100 @@ codificava a mesma inferência que o código.
 | Diferença só de corpo | 1 (`/ping\tx`: 400 nos dois, corpo diferente) |
 | Linhas em `divergenciasConhecidas` | 6 |
 | Testes do pacote `httpapi` | todos passam |
+
+---
+
+## Validação com um Diário Oficial REAL
+
+**A pedido**, com um PDF trazido de fora: `exemplos/dou-secao1-2026-07-08.pdf`,
+Diário Oficial da União, Seção 1, nº 126 de 8 de julho de 2026, página 177 —
+deliberações do MPT. Uma página, 17.307 caracteres depois da normalização.
+
+### Por que isso não é redundante com o corpus dourado
+
+O corpus dourado da F0 tem 28 documentos, e todos os 28 **nós escrevemos**. A
+F12 registrou isso como a maior ressalva do relatório de paridade: são
+sintéticos, e sintético não sabe produzir o que documento real produz — texto
+posicionado com espaço entre as letras, abreviação, número de processo colado,
+caixa alta acentuada.
+
+Isto **não fecha D-11**, que continua bloqueante: um documento não é corpus, e
+não há oráculo em Rust para compará-lo. O que ele responde é uma pergunta menor
+e que estava aberta: **o serviço processa um Diário Oficial de verdade?**
+
+Responde: sim. `status 5`, 5 recortes, 59 ms.
+
+### A matriz medida
+
+Oito expressões, **uma por perfil** — dentro de um mesmo perfil a primeira a
+encontrar a página consome a página (INV-P12) e o resultado seria correto e
+ilegível.
+
+| Perfil | Expressão | Resultado |
+|---|---|---|
+| 301 | `BR BPO TECNOLOGIA E SERVICOS` | casou |
+| 302 | `CASAMAX COMERCIAL E SERVICOS LTDA` | casou |
+| 303 | `LEI GERAL DE PROTECAO DE DADOS` | casou |
+| 304 | `DEBORAH DA SILVA FELIX` | casou |
+| 305 | `HOMOLOGACOES DE ARQUIVAMENTO` | casou |
+| 306 | `EMPRESA BRASILEIRA DE CORREIOS E TELEGRAFOS` | **não** |
+| 307 | `LEI GERAL DE PROTEÇÃO DE DADOS` | **não** |
+| 308 | `PREFEITURA MUNICIPAL DE SAO PAULO` | **não** |
+
+**As três que não casaram valem mais que as cinco que casaram.**
+
+**306** — a extração devolve `TELEG R A FO S`, com espaço entre as letras,
+porque é assim que o texto está posicionado no documento. Cinco termos onde a
+expressão espera um. O serviço está certo; o legado também não casaria. Nenhum
+documento sintético nosso teria produzido esse caso.
+
+**307** — a MESMA expressão do 303, com acento. Não casa, porque o texto
+indexado perdeu os acentos e a expressão cadastrada não passa pela mesma
+normalização. É INV-P19, DEFEITO PRESERVADO. O par 303/307 é a demonstração
+viva: a única diferença entre as duas linhas é o acento.
+
+### A matriz virou teste, não afirmação
+
+`internal/app/diario_real_test.go` submete o PDF pelo HTTP de produção e confere
+as duas direções — toda expressão que deve casar tem recorte, e **nenhuma** das
+que não devem tem. Roda com as chaves no padrão.
+
+**Verificado por sabotagem**, e o resultado é o mais instrutivo da rodada.
+Trocando `extratorDeProducao` pelo extrator cru — o defeito exato que a F12
+encontrou:
+
+```
+perfil 303 "LEI GERAL DE PROTECAO DE DADOS"  NÃO gerou recorte; deveria casar
+perfil 305 "HOMOLOGACOES DE ARQUIVAMENTO"    NÃO gerou recorte; deveria casar
+perfil 307 "LEI GERAL DE PROTEÇÃO DE DADOS"  gerou recorte; NÃO deveria casar
+```
+
+A terceira linha é a **inversão de INV-P19** que o relatório da F12 descreveu em
+prosa, agora observada sobre entrada real: sem a normalização, a expressão
+acentuada — inerte no legado — passa a casar, e a sem acento para. O teste pega
+a inversão nas duas direções.
+
+A sabotagem foi desfeita por edição, não por `git checkout` — a lição da F12.
+
+### O que entrou no repositório
+
+| Arquivo | Papel |
+|---|---|
+| `exemplos/dou-secao1-2026-07-08.pdf` | o documento real, 162 KB, publicação oficial pública |
+| `db/init/03-perfis-do-dou-real.sql` | os oito perfis, com o porquê de cada linha |
+| `internal/app/diario_real_test.go` | a matriz como asserção |
+| `README.md` § "Validando com um diário real" | o procedimento, para DBeaver ou linha de comando |
+
+O compose monta `./db/init` inteiro, então `03-` é aplicado sozinho na criação
+do volume. `prepararEsquema` dos testes de integração também o aplica.
+
+### Medições
+
+| O que | Valor |
+|---|---|
+| Páginas | 1 |
+| Caracteres depois da normalização | 17.307 |
+| Expressões medidas | 8 — 5 casam, 3 não |
+| Recortes gerados | 5 |
+| Tempo de processamento | 59 ms |
+| Sabotagem do extrator | 3 linhas da matriz + 4 do texto acusam |

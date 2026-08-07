@@ -47,6 +47,81 @@ Resposta: `PDF carregado com sucesso`. O processamento é **assíncrono** — o 
 confirma o registro, não o resultado. O documento de exemplo casa com os perfis
 semeados e produz um recorte.
 
+## Validando com um diário real
+
+`exemplos/diario-de-exemplo.pdf` é sintético: foi escrito para casar. A pergunta
+que interessa é outra — **o serviço funciona sobre um diário de verdade?**
+
+`exemplos/dou-secao1-2026-07-08.pdf` é um Diário Oficial da União real (Seção 1,
+nº 126, 8 de julho de 2026, página 177 — deliberações do MPT). Uma página,
+17.307 caracteres depois da normalização. `db/init/03-perfis-do-dou-real.sql`
+semeia oito perfis casados com ele, **um por expressão**, para que o resultado
+seja legível: uma linha por expressão.
+
+```sh
+curl -X POST http://localhost:6001/pdf \
+  -H "X-API-KEY: 01956cb2-2f85-7440-9767-1a6651c10e0f" \
+  -F "data-caderno=2026-07-08" \
+  -F "data-disponibilizacao=2026-07-08" \
+  -F "id-usuario=44521" \
+  -F "id-caderno=1" \
+  -F "pdf=@exemplos/dou-secao1-2026-07-08.pdf"
+```
+
+Espere um segundo e consulte — no DBeaver, ou por linha de comando:
+
+```sql
+SELECT v.id_perfil,
+       v.expressao_nm,
+       COALESCE('CASOU pág. ' || r.nr_pagina, 'não casou') AS resultado
+FROM recorte.tb_perfil_variacao v
+LEFT JOIN recorte.tb_recorte r ON r.id_perfil = v.id_perfil
+WHERE v.id_perfil BETWEEN 301 AND 308
+ORDER BY v.id_perfil;
+```
+
+O resultado é **exatamente** este — foi medido, não previsto:
+
+| Perfil | Expressão | Resultado | O que isso prova |
+|---|---|---|---|
+| 301 | `BR BPO TECNOLOGIA E SERVICOS` | CASOU | frase de 4 termos |
+| 302 | `CASAMAX COMERCIAL E SERVICOS LTDA` | CASOU | frase de 5 termos |
+| 303 | `LEI GERAL DE PROTECAO DE DADOS` | CASOU | no PDF está `Lei Geral de Proteção de Dados` — **com acento e em caixa mista** |
+| 304 | `DEBORAH DA SILVA FELIX` | CASOU | no PDF, `Dra. Deborah da Silva Felix` |
+| 305 | `HOMOLOGACOES DE ARQUIVAMENTO` | CASOU | no PDF, `HOMOLOGAÇÕES DE ARQUIVAMENTO` |
+| 306 | `EMPRESA BRASILEIRA DE CORREIOS E TELEGRAFOS` | não casou | ver abaixo |
+| 307 | `LEI GERAL DE PROTEÇÃO DE DADOS` | não casou | **a mesma do 303, com acento** |
+| 308 | `PREFEITURA MUNICIPAL DE SAO PAULO` | não casou | controle negativo |
+
+E a importação:
+
+```sql
+SELECT id_importacao, status, total_recortes, nome_original_pdf
+FROM recorte.tb_importacao;
+--  1 | 5 | 5 | dou-secao1-2026-07-08.pdf
+```
+
+`status = 5` é *finalizado*. Com `STATUS_ENDPOINT=true`, o mesmo dado sai por
+`GET /importacao/1` com a chave de API.
+
+### As três linhas que não casaram valem mais que as cinco que casaram
+
+**306 — o serviço está certo, o PDF é que é assim.** A extração devolve
+`EMPRESA BRASILEIRA DE CORREIOS E TELEG R A FO S`: o texto foi posicionado com
+espaço entre as letras no documento original, e vira cinco termos onde a
+expressão espera um. Nenhum motor de busca por frase casaria — o legado em Rust
+também não casa.
+
+**307 — é DEFEITO PRESERVADO, e o par 303/307 é a demonstração viva.** A mesma
+expressão, uma sem acento e outra com. O texto indexado passa pela remoção de
+diacríticos; **a expressão cadastrada não passa.** Então expressão acentuada é
+**inerte**: nunca casa com nada. Isso é comportamento do serviço original
+(`INVARIANTES.md`, INV-P19) e foi reproduzido de propósito. Corrigir mudaria o
+que os clientes recebem hoje, e a regra do projeto é preservar.
+
+Se você cadastrar uma expressão e ela não casar, **o acento é a primeira coisa
+a conferir.**
+
 > **A chave de API está no repositório, em claro.**
 >
 > `01956cb2-2f85-7440-9767-1a6651c10e0f` é o mesmo valor que o serviço original
@@ -71,10 +146,10 @@ semeados e produz um recorte.
 | `api/openapi.yaml` | Contrato da API, com as adições opcionais marcadas por `x-chave` |
 | `cmd/recorte-api/` | Ponto de entrada |
 | `internal/` | O serviço: domínio, casos de uso, adaptadores e raiz de composição |
-| `db/init/` | Esquema e perfis de exemplo para execução local |
+| `db/init/` | Esquema e dois conjuntos de perfis de exemplo — o sintético e o do diário real |
 | `db/migrations/` | Migrações de banco |
 | `deploy/Dockerfile`, `docker-compose.yml` | Empacotamento e execução local |
-| `exemplos/` | Um diário de exemplo, para o `curl` acima |
+| `exemplos/` | Dois diários: um sintético, feito para casar, e um **Diário Oficial da União real** |
 
 ### O que saiu do repositório, e onde encontrar
 

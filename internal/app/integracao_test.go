@@ -56,6 +56,7 @@ func prepararEsquema(t *testing.T, dsn string) {
 	for _, arquivo := range []string{
 		"../../db/init/01-esquema.sql",
 		"../../db/init/02-dados-de-exemplo.sql",
+		"../../db/init/03-perfis-do-dou-real.sql",
 	} {
 		bruto, err := os.ReadFile(arquivo)
 		if err != nil {
