@@ -410,7 +410,8 @@ comentário de `normalizarCaminho` dizia "MEDIDO por `tools/sonda-http`" e lista
 A sonda da F9 havia medido **duas** dessas formas. As outras vieram de ler o
 Salvo, e uma delas estava errada.
 
-`tools/sonda-http --bin sonda-caminho` mediu 42 casos contra um servidor Salvo de
+`tools/sonda-http --bin sonda-caminho` — comitada em `227c97c` e removida da
+árvore em seguida, como o oráculo da F12 — mediu 45 casos contra um Salvo de
 verdade, com a linha de requisição escrita byte a byte num socket — sem cliente
 HTTP no meio, porque é a forma **crua** do caminho que está em jogo.
 

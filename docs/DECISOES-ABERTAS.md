@@ -404,7 +404,8 @@ porte copiou a inferência e ficou com um `/./ping` respondendo 200 onde o legad
 responde 404.
 
 A segunda rodada (`tools/sonda-http --bin sonda-caminho`, 45 casos, servidor de
-verdade com a linha de requisição escrita byte a byte) mediu. A regra é:
+verdade com a linha de requisição escrita byte a byte) mediu. A sonda não está
+na árvore; volta com `git checkout 227c97c -- tools/sonda-http`. A regra é:
 
 > parta em `/`, descarte os segmentos **vazios**, decodifique **cada segmento**
 > que sobrou, e junte de volta com `/`.

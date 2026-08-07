@@ -279,7 +279,8 @@ quando **D-15** for respondida.
 
 A primeira rodada (F9) só mediu `/ping/` e `/PING`, e o resto desta seção era
 **inferido apesar de estar marcado como medido**. A segunda rodada
-(`tools/sonda-http --bin sonda-caminho`) mediu 45 casos contra o Salvo de
+(`tools/sonda-http --bin sonda-caminho`, recuperável com
+`git checkout 227c97c -- tools/sonda-http`) mediu 45 casos contra o Salvo de
 verdade e corrigiu duas afirmações. Detalhe em **D-08** e **D-24**.
 
 A regra medida, em uma frase:

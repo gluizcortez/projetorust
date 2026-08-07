@@ -24,12 +24,16 @@ import (
 // O que trouxe o assunto de volta foi um relato de campo: um `curl` com um
 // espaço sobrando na URL virou `GET /ping%20` e recebeu 404.
 //
-// `tools/sonda-http --bin sonda-caminho` mediu os 27 casos abaixo contra o
-// Salvo 0.95.2 de verdade, escrevendo a linha de requisição byte a byte num
-// socket — nenhum cliente HTTP no meio, porque é justamente a forma CRUA do
-// caminho que está em jogo. Os `status` desta tabela são o que o legado
-// respondeu. Reproduzir a medição:
+// `tools/sonda-http --bin sonda-caminho` mediu 45 casos contra o Salvo 0.95.2
+// de verdade, escrevendo a linha de requisição byte a byte num socket — nenhum
+// cliente HTTP no meio, porque é justamente a forma CRUA do caminho que está em
+// jogo. Os `status` das tabelas abaixo são o que o legado respondeu.
 //
+// A sonda NÃO está na árvore: como o oráculo da F12, foi comitada e removida,
+// para que o repositório contenha só o que o serviço precisa para rodar.
+// Reproduzir a medição:
+//
+//	git checkout 227c97c -- tools/sonda-http
 //	cargo run --release --manifest-path tools/sonda-http/Cargo.toml \
 //	    --bin sonda-caminho
 //

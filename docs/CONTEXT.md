@@ -2119,11 +2119,17 @@ falha e diz o que fazer.
 ### A sonda saiu do repositório de novo
 
 Mesmo tratamento que o oráculo da F12 recebeu no enxugamento: a medição fica
-congelada em `caminho_test.go`, e o aparato é recuperável do histórico.
+congelada em `caminho_test.go`, e o aparato é recuperável do histórico. Ela foi
+**comitada primeiro** (227c97c) justamente para ser citável por SHA:
 
+```sh
+git checkout 227c97c -- tools/sonda-http
+cargo run --release --manifest-path tools/sonda-http/Cargo.toml --bin sonda-caminho
 ```
-git show <sha>:tools/sonda-http/src/bin/sonda-caminho.rs
-```
+
+Manter um *crate* Rust na árvore contradiz o enxugamento a que este repositório
+foi submetido a pedido — o serviço não o compila, não o distribui e não precisa
+dele para rodar.
 
 ### Duas linhas de teste antigas estavam erradas
 
