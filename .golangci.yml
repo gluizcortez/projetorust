@@ -100,22 +100,22 @@ linters:
   exclusions:
     generated: lax
     rules:
-      # cmd/ é a fronteira do processo: pode encerrar e pode imprimir.
-      - path: ^cmd/
+      # src/main é a fronteira do processo: pode encerrar e pode imprimir.
+      - path: ^src/main/
         linters: [forbidigo]
 
       # O middleware de recuperação e a fronteira da tarefa de fundo existem
       # justamente para conter pânico — precisam mencioná-lo.
-      - path: ^internal/adapter/httpapi/middleware/recover\.go$
+      - path: ^src/middleware/recover\.go$
         linters: [forbidigo]
-      - path: ^internal/platform/worker/
+      - path: ^src/worker/
         linters: [forbidigo]
 
       # A unidade de trabalho precisa repropagar o pânico DEPOIS de reverter a
       # transação: engoli-lo esconderia o defeito, e não reverter prenderia a
       # conexão até o tempo limite do pool. É a mesma classe de fronteira que
       # as duas exclusões acima.
-      - path: ^internal/adapter/postgres/uow\.go$
+      - path: ^src/postgres/uow\.go$
         linters: [forbidigo]
 
       # O ferramental de apoio não é o serviço.
@@ -130,7 +130,7 @@ linters:
 #             pt-BR. Removido na fase F1 após medição.
 #
 #   depguard  Recusado na fase F1: a regra de dependência era verificada por
-#             internal/arch_test.go, removido junto com os demais testes.
+#             arch_test.go, removido junto com os demais testes.
 
 formatters:
   enable:
