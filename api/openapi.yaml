@@ -1,0 +1,520 @@
+openapi: 3.1.0
+
+# ATENÇÃO — ESTE DOCUMENTO DESCREVE O CONTRATO; NÃO O DEFINE.
+#
+# O contrato normativo é docs/ESPECIFICACAO.md §1, com os corpos de resposta
+# LITERAIS, conferidos byte a byte contra reference/main.rs e medidos com
+# tools/sonda-http. Divergindo os dois, a especificação vence e este arquivo é
+# corrigido.
+#
+# Tudo o que depende de chave de configuração está marcado com `x-chave` e o
+# nome da variável de ambiente. COM TODAS AS CHAVES NO PADRÃO, apenas /ping e
+# /pdf existem — o resto devolve 404.
+
+info:
+  title: Serviço de recorte de diários oficiais
+  version: "1.0.0"
+  summary: Ingestão de diários em PDF e geração de recortes por perfil de cliente.
+  description: |
+    Recebe um diário oficial em PDF, registra a importação e processa o
+    documento em SEGUNDO PLANO: extrai o texto, indexa e busca as expressões
+    dos perfis associados ao caderno.
+
+    ## A resposta 200 não significa que o processamento terminou
+
+    `POST /pdf` responde **antes** de o documento ser processado. O corpo
+    `PDF carregado com sucesso` confirma o REGISTRO, não o resultado. No
+    serviço com `STATUS_ENDPOINT` desligado — o padrão — não existe forma de
+    consultar o desfecho pela API.
+
+    ## Os corpos são texto puro, não JSON
+
+    Todas as respostas do contrato existente são `text/plain; charset=utf-8`
+    com uma frase literal, sem ponto final. Clientes que analisam a mensagem
+    dependem do texto exato; ele está reproduzido aqui em `example` e não pode
+    ser alterado.
+
+    Com `RESPOSTA_PROBLEM_JSON` ligada, apenas as respostas de **erro**
+    (código ≥ 400) passam a `application/problem+json`. As de sucesso
+    permanecem em texto: um 200 não é um problema.
+
+    ## Chaves de configuração
+
+    Toda capacidade opcional nasce DESLIGADA e o padrão reproduz o
+    comportamento do serviço original. Ver `docs/OPERACAO.md`.
+
+  contact:
+    name: Equipe do serviço de recorte
+  # O repositório não declara licença (não há LICENSE). `LicenseRef-` é a forma
+  # do SPDX para licença NÃO listada — é o que se pode afirmar sem inventar.
+  license:
+    name: Proprietário
+    identifier: LicenseRef-Proprietario
+
+servers:
+  - url: http://{host}:{porta}
+    description: Instância do serviço
+    variables:
+      host:
+        default: "192.168.42.1"
+        description: SERVIDOR_IP
+      porta:
+        default: "6001"
+        description: SERVIDOR_PORTA
+
+tags:
+  - name: ingestão
+    description: Submissão de documentos.
+  - name: operação
+    description: Sondas e consulta de estado.
+
+paths:
+  /ping:
+    get:
+      tags: [operação]
+      operationId: ping
+      summary: Verifica se o processo responde
+      description: |
+        NÃO consulta o banco nem qualquer outra dependência: responde `pong`
+        com o PostgreSQL indisponível. É contrato existente e **não muda** com
+        `HEALTH_ENDPOINTS` ligada — quem verifica dependência é
+        `/health/ready`.
+
+        O roteador normaliza barras como o original: `/ping`, `/ping/`,
+        `/ping//`, `//ping` e `/./ping` chegam todos aqui. `/ping/x` não.
+      security: []
+      responses:
+        "200":
+          description: O processo está de pé.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: pong
+        "405":
+          $ref: "#/components/responses/MetodoNaoPermitido"
+
+  /pdf:
+    post:
+      tags: [ingestão]
+      operationId: enviarPDF
+      summary: Submete um diário para recorte
+      description: |
+        Valida os campos, registra a importação e agenda o processamento.
+
+        ## Ordem das críticas
+
+        A resposta 400 traz as críticas concatenadas por **vírgula sem
+        espaço**, na ordem fixa: data do caderno, data de disponibilização, id
+        do usuário, id do caderno, PDF. A ordem é contrato.
+
+        ## Formato das datas
+
+        `AAAA-MM-DD`, com o analisador permissivo do original: `2024-3-15` e
+        `2024-03-5` são aceitos, e `24-03-15` é lido como o ano 24. Ver
+        `docs/INVARIANTES.md`, INV-P21.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/SubmissaoPDF"
+            encoding:
+              pdf:
+                contentType: application/pdf
+      responses:
+        "200":
+          description: |
+            Importação REGISTRADA. O processamento ainda não começou.
+
+            Com `IDEMPOTENCIA_POR_HASH` ligada, um reenvio do mesmo documento
+            para o mesmo caderno e a mesma data devolve esta mesma resposta
+            **sem** registrar importação nova.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: PDF carregado com sucesso
+        "400":
+          description: |
+            Um ou mais campos foram rejeitados. O corpo é a concatenação das
+            críticas por vírgula sem espaço.
+          content:
+            text/plain:
+              schema: { type: string }
+              examples:
+                umaCritica:
+                  value: Data do caderno não informada
+                variasCriticas:
+                  summary: Ordem fixa, vírgula sem espaço
+                  value: Data do caderno é inválida,Id do usuário é inválido
+                acimaDoLimite:
+                  summary: Só com MAX_UPLOAD_BYTES ligada
+                  value: PDF excede o tamanho máximo
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+        "401":
+          $ref: "#/components/responses/NaoAutorizado"
+        "405":
+          $ref: "#/components/responses/MetodoNaoPermitido"
+        "422":
+          description: |
+            Falha ao processar a submissão. O mesmo texto cobre todas as
+            causas — o serviço não as distingue nesta resposta.
+
+            Com `VALIDAR_ASSINATURA_PDF` ligada, um arquivo que não começa com
+            `%PDF-` cai aqui, com **este mesmo texto**: a chave não introduz
+            mensagem nova.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Erro ao processar o PDF
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+        "429":
+          $ref: "#/components/responses/TaxaExcedida"
+        "500":
+          description: |
+            Defeito interno. **Não existe** no serviço original, onde um pânico
+            no manipulador fecha a conexão sem resposta. O corpo vai vazio de
+            propósito: qualquer texto seria invenção.
+
+  /importacao/{id}:
+    get:
+      tags: [operação]
+      operationId: consultarImportacao
+      summary: Consulta o estado de uma importação
+      x-chave: STATUS_ENDPOINT
+      description: |
+        **Só existe com `STATUS_ENDPOINT=true`.** Desligada — o padrão —, este
+        caminho devolve 404 com a página HTML de rota inexistente.
+
+        É ADIÇÃO PURA: nenhuma rota existente muda.
+
+        O corpo de SUCESSO é sempre JSON, independentemente de
+        `RESPOSTA_PROBLEM_JSON`; a chave governa o formato dos erros.
+
+        Não expõe o resumo SHA-256 nem o nome original do arquivo.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Identificador da importação. Inteiro positivo.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          example: 42
+      responses:
+        "200":
+          description: Estado atual da importação.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResumoDaImportacao" }
+              examples:
+                emCurso:
+                  summary: Ainda processando — total_recortes AUSENTE
+                  value:
+                    id_importacao: 42
+                    status: 3
+                    status_rotulo: recortando
+                    data_caderno: "2024-03-15"
+                    data_disponibilizacao: "2024-03-16"
+                    data_inicio: "2024-03-16T10:00:00Z"
+                    concluida: false
+                finalizadaSemRecortes:
+                  summary: Terminou sem ocorrências — total_recortes é 0, não ausente
+                  value:
+                    id_importacao: 42
+                    status: 5
+                    status_rotulo: finalizado
+                    data_caderno: "2024-03-15"
+                    data_disponibilizacao: "2024-03-16"
+                    data_inicio: "2024-03-16T10:00:00Z"
+                    data_fim: "2024-03-16T10:02:30Z"
+                    total_recortes: 0
+                    concluida: true
+        "400":
+          description: Identificador ausente, não numérico ou não positivo.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Identificador inválido
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+        "401":
+          $ref: "#/components/responses/NaoAutorizado"
+        "404":
+          description: |
+            Nenhuma importação com esse identificador.
+
+            ATENÇÃO: com a chave DESLIGADA este caminho também devolve 404, mas
+            em `text/html` — é a página de rota inexistente, não esta resposta.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Importação não encontrada
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+        "405":
+          $ref: "#/components/responses/MetodoNaoPermitido"
+        "429":
+          $ref: "#/components/responses/TaxaExcedida"
+        "500":
+          description: Falha ao consultar o banco.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Erro ao consultar a importação
+
+  /health/live:
+    get:
+      tags: [operação]
+      operationId: healthLive
+      summary: Sonda de vivacidade
+      x-chave: HEALTH_ENDPOINTS
+      security: []
+      description: |
+        **Só existe com `HEALTH_ENDPOINTS=true`.**
+
+        Responde enquanto o processo estiver de pé. NÃO consulta nada, de
+        propósito: uma sonda de vivacidade que dependa do banco faz o
+        orquestrador REINICIAR o serviço quando o banco cai — o que não
+        conserta o banco e derruba as importações em andamento.
+      responses:
+        "200":
+          description: O processo está vivo.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: vivo
+        "405":
+          $ref: "#/components/responses/MetodoNaoPermitido"
+
+  /health/ready:
+    get:
+      tags: [operação]
+      operationId: healthReady
+      summary: Sonda de prontidão
+      x-chave: HEALTH_ENDPOINTS
+      security: []
+      description: |
+        **Só existe com `HEALTH_ENDPOINTS=true`.**
+
+        Verifica duas condições: o banco responde, e a fila de importações está
+        abaixo do teto. A segunda só tem efeito com
+        `MAX_IMPORTACOES_CONCORRENTES` ligado.
+
+        O MOTIVO da reprovação não vai no corpo: ele descreve a topologia
+        interna e a sonda é alcançável sem credencial. Quem precisa do motivo
+        lê o registro estruturado.
+      responses:
+        "200":
+          description: Pronto para receber tráfego.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: pronto
+        "405":
+          $ref: "#/components/responses/MetodoNaoPermitido"
+        "503":
+          description: |
+            Alguma dependência não responde, ou a fila está cheia. O
+            orquestrador deve tirar a instância da rotação — e não matá-la.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: indisponível
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-KEY
+      description: |
+        Credencial fixa, comparada em tempo constante.
+
+        O nome do cabeçalho é insensível a maiúsculas. Cabeçalho REPETIDO usa o
+        primeiro valor. Cabeçalho presente e VAZIO conta como inválido, não
+        como ausente — e as duas respostas têm textos diferentes.
+
+  schemas:
+    SubmissaoPDF:
+      type: object
+      description: |
+        Os nomes dos campos usam HÍFEN, não sublinhado. Campo repetido usa o
+        PRIMEIRO valor.
+      required: [data-caderno, data-disponibilizacao, id-usuario, id-caderno, pdf]
+      properties:
+        data-caderno:
+          type: string
+          description: Data do caderno, AAAA-MM-DD.
+          example: "2024-03-15"
+        data-disponibilizacao:
+          type: string
+          description: Data de disponibilização, AAAA-MM-DD.
+          example: "2024-03-16"
+        id-usuario:
+          type: string
+          description: Identificador de quem submete. Inteiro de 64 bits.
+          example: "44521"
+        id-caderno:
+          type: string
+          description: Identificador do caderno. Inteiro de 32 bits.
+          example: "1"
+        pdf:
+          type: string
+          format: binary
+          description: |
+            O documento. A parte é reconhecida como ARQUIVO pela presença do
+            parâmetro `filename` na `Content-Disposition`, ainda que VAZIO —
+            `filename=""` é aceito e grava nome vazio.
+
+            Sem `MAX_UPLOAD_BYTES` não há limite de tamanho, e sem
+            `VALIDAR_ASSINATURA_PDF` não há verificação de tipo: qualquer
+            arquivo é aceito e a falha só aparece no processamento assíncrono,
+            como status −1.
+
+    ResumoDaImportacao:
+      type: object
+      description: |
+        Campos nulos são OMITIDOS. `total_recortes` ausente significa "não
+        terminou"; `total_recortes: 0` significa "terminou sem ocorrências".
+        A distinção importa — ver `docs/INVARIANTES.md`, INV-P20.
+      required: [id_importacao, status, status_rotulo, concluida]
+      properties:
+        id_importacao:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/Status"
+        status_rotulo:
+          type: string
+          enum: [erro, recebido, selecionado, indexando, recortando, reservado, finalizado]
+        data_caderno:
+          type: string
+          example: "2024-03-15"
+        data_disponibilizacao:
+          type: string
+          example: "2024-03-16"
+        data_inicio:
+          type: string
+          format: date-time
+          description: Carimbo do servidor de banco. Ausente até a tarefa começar.
+        data_fim:
+          type: string
+          format: date-time
+          description: Carimbo do servidor de banco. Ausente até a tarefa terminar.
+        total_recortes:
+          type: integer
+          format: int32
+          minimum: 0
+        concluida:
+          type: boolean
+          description: Verdadeiro para os estados terminais, 5 e −1.
+
+    Status:
+      type: integer
+      format: int32
+      description: |
+        Estado da importação.
+
+        | Valor | Significado |
+        |------:|-------------|
+        | −1 | erro, terminal |
+        | 0 | recebida, ainda não processada |
+        | 1 | selecionada — a tarefa começou |
+        | 2 | indexando |
+        | 3 | recortando |
+        | 4 | RESERVADO, nunca gravado |
+        | 5 | finalizada, terminal |
+
+        Uma importação parada em 1, 2 ou 3 pode estar PRESA: no serviço
+        original, uma tarefa que morre não atualiza o estado e a linha fica
+        assim para sempre. Ver `VARREDURA_ORFAS`.
+      enum: [-1, 0, 1, 2, 3, 4, 5]
+
+    Problema:
+      type: object
+      description: |
+        RFC 7807. Só com `RESPOSTA_PROBLEM_JSON=true`, e SOMENTE para códigos
+        ≥ 400 — respostas de sucesso permanecem em `text/plain`.
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          const: "about:blank"
+          description: O serviço não publica taxonomia de erros.
+        title:
+          type: string
+          example: Bad Request
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          description: O texto LITERAL que a resposta em texto traria.
+          example: Data do caderno é inválida,Id do usuário é inválido
+        instance:
+          type: string
+          description: |
+            Caminho da requisição. Sem a cadeia de consulta — ela pode carregar
+            dado do cliente. A correlação de uma resposta específica é feita
+            pelo cabeçalho `x-request-id`.
+          example: /pdf
+        criticas:
+          type: array
+          description: |
+            Extensão do serviço: a mesma lista que o formato de texto
+            concatena, PRESERVANDO A ORDEM. Ausente quando não há.
+          items: { type: string }
+          example:
+            - Data do caderno é inválida
+            - Id do usuário é inválido
+
+  responses:
+    NaoAutorizado:
+      description: |
+        Credencial ausente ou inválida. Os DOIS textos são distintos e isso é
+        contrato existente — unificá-los quebraria clientes que hoje os
+        distinguem. Ver `docs/DECISOES-ABERTAS.md`, D-09.
+      content:
+        text/plain:
+          schema: { type: string }
+          examples:
+            ausente:
+              value: Faltou a X-API-KEY
+            invalida:
+              summary: Também é o caso do cabeçalho presente e vazio
+              value: X-API-KEY inválida
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problema" }
+
+    MetodoNaoPermitido:
+      description: |
+        O método perde ANTES da autenticação: `GET /pdf` sem credencial devolve
+        405, não 401.
+
+        O corpo é uma página HTML do arcabouço original, reproduzida byte a
+        byte — inclusive o rodapé. Ver `docs/DECISOES-ABERTAS.md`, D-20.
+      content:
+        text/html:
+          schema: { type: string }
+
+    TaxaExcedida:
+      description: |
+        Só com `RATE_LIMIT_RPS` maior que zero. Balde de fichas por chave de
+        API, em memória, por instância — não é limite global do serviço.
+      headers:
+        Retry-After:
+          description: Segundos até valer a pena tentar de novo. Sempre ≥ 1.
+          schema: { type: integer, minimum: 1 }
+          example: 1
+      content:
+        text/plain:
+          schema: { type: string }
+          example: Limite de requisições excedido
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problema" }
+
+security:
+  - apiKey: []

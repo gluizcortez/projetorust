@@ -65,6 +65,50 @@ type Pool struct {
 
 	mu         sync.Mutex
 	encerrando bool
+
+	// observador recebe as transições de fila. NUNCA é nulo: NovoPool instala
+	// ObservadorNulo quando ninguém fornece um.
+	observador Observador
+}
+
+// Observador recebe as transições da fila do executor.
+//
+// Existe para que o pool possa ser instrumentado sem conhecer o Prometheus — a
+// regra de dependência vale aqui como em qualquer outro lugar. Quem liga os
+// dois é a raiz de composição.
+//
+// Toda implementação precisa tolerar chamada concorrente.
+type Observador interface {
+	// ObservarFila informa quantas submissões aguardam vaga e quantas tarefas
+	// estão em andamento, DEPOIS da transição que disparou a chamada.
+	ObservarFila(aguardando, emAndamento int64)
+
+	// ObservarEspera registra quanto tempo uma submissão esperou por vaga. Só é
+	// chamada quando houve espera de fato — o caminho sem teto não a alimenta.
+	ObservarEspera(espera time.Duration)
+}
+
+// ObservadorNulo descarta tudo. É o padrão.
+type ObservadorNulo struct{}
+
+var _ Observador = ObservadorNulo{}
+
+// ObservarFila não faz nada.
+func (ObservadorNulo) ObservarFila(int64, int64) {}
+
+// ObservarEspera não faz nada.
+func (ObservadorNulo) ObservarEspera(time.Duration) {}
+
+// Opcao configura o pool na construção.
+type Opcao func(*Pool)
+
+// ComObservador instala a instrumentação da fila. Observador nulo é ignorado.
+func ComObservador(o Observador) Opcao {
+	return func(p *Pool) {
+		if o != nil {
+			p.observador = o
+		}
+	}
 }
 
 // NovoPool cria o executor.
@@ -72,10 +116,13 @@ type Pool struct {
 // `maxConcorrentes` menor ou igual a zero desliga o teto, reproduzindo o
 // legado. Qualquer valor positivo é EVOLUÇÃO: limita o paralelismo e faz
 // Submeter bloquear enquanto não houver vaga.
-func NovoPool(logger *slog.Logger, maxConcorrentes int) *Pool {
-	p := &Pool{logger: logger}
+func NovoPool(logger *slog.Logger, maxConcorrentes int, opcoes ...Opcao) *Pool {
+	p := &Pool{logger: logger, observador: ObservadorNulo{}}
 	if maxConcorrentes > 0 {
 		p.vagas = make(chan struct{}, maxConcorrentes)
+	}
+	for _, opcao := range opcoes {
+		opcao(p)
 	}
 	return p
 }
@@ -109,9 +156,14 @@ func (p *Pool) Submeter(ctx context.Context, ctxDaTarefa context.Context, tarefa
 	}
 
 	p.emAndamento.Add(1)
+	p.notificar()
 
 	go func() {
 		defer p.grupo.Done()
+		// A ordem dos `defer` é a INVERSA da declaração: a notificação sai por
+		// último, depois de o contador cair e a vaga voltar, para que o
+		// observador nunca veja um estado intermediário.
+		defer p.notificar()
 		defer p.emAndamento.Add(-1)
 		defer p.devolverVaga()
 		defer p.recuperar(ctxDaTarefa)
@@ -120,6 +172,11 @@ func (p *Pool) Submeter(ctx context.Context, ctxDaTarefa context.Context, tarefa
 	}()
 
 	return nil
+}
+
+// notificar entrega o estado corrente da fila ao observador.
+func (p *Pool) notificar() {
+	p.observador.ObservarFila(p.aguardando.Load(), p.emAndamento.Load())
 }
 
 // tomarVaga bloqueia até haver vaga, ou até o contexto expirar.
@@ -136,8 +193,18 @@ func (p *Pool) tomarVaga(ctx context.Context) error {
 	default:
 	}
 
+	// Daqui para baixo houve espera de fato, e é só isso que a instrumentação
+	// registra: o caminho rápido acima não produz amostra, para que a série não
+	// sugira fila onde não há.
 	p.aguardando.Add(1)
-	defer p.aguardando.Add(-1)
+	p.notificar()
+
+	inicio := time.Now()
+	defer func() {
+		p.aguardando.Add(-1)
+		p.observador.ObservarEspera(time.Since(inicio))
+		p.notificar()
+	}()
 
 	select {
 	case p.vagas <- struct{}{}:

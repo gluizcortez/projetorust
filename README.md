@@ -15,6 +15,8 @@ atrás de chave de configuração desligada por padrão.
 | `docs/DECISOES-ABERTAS.md` | Perguntas pendentes, com padrão provisório e responsável |
 | `docs/MAPA-DE-CHAMADAS.md` | Grafo de chamadas do legado e achados estruturais |
 | `docs/CONTEXT.md` | Memória do projeto entre fases — decisões, desvios, pendências |
+| `docs/OPERACAO.md` | Guia de operação: tabela de chaves, ordem de ativação, valores por porte de carga, métricas e alarmes |
+| `api/openapi.yaml` | Contrato da API, com as adições opcionais marcadas por `x-chave` |
 | `reference/main.rs` | Implementação Rust de referência (normativa) |
 | `tools/` | Ferramental de apoio: captura de corpus, corpus sintético e sondas do comportamento do legado |
 | `test/testdata/corpus/` | Documentos de entrada |
@@ -35,7 +37,7 @@ atrás de chave de configuração desligada por padrão.
 | F8 | Pipeline e máquina de estados | **concluída** — sequência de chamadas fixada, 98,4% de cobertura |
 | F9 | Camada HTTP | **concluída** — contrato byte a byte; D-07, D-08 e D-10 resolvidas por medição |
 | F10 | Ciclo de vida e drenagem | **concluída** — sinais reais, drenagem por notificação, códigos de saída |
-| F11 | Evoluções técnicas atrás de chaves | pendente |
+| F11 | Evoluções técnicas atrás de chaves | **concluída** — dez chaves, todas desligadas por padrão; D-21 aberta |
 | F12 | Paridade e execução em sombra | pendente |
 | F13 | Corte e descomissionamento | pendente |
 
@@ -47,6 +49,8 @@ prazo de resposta corre em paralelo às fases seguintes:
 - **D-15** — `Cargo.toml` e `Cargo.lock` do serviço em produção.
 - **D-11** — corpus de PDFs reais anonimizados e *dump* das tabelas de perfil.
 
-Dois achados são **defeitos de produto existentes**, não questões da migração, e
-foram escalados: **D-17** (perfis com expressões acentuadas estão inertes) e
-**D-18** (PDFs truncados são registrados como processados com sucesso).
+Três achados são **defeitos de produto existentes**, não questões da migração, e
+foram escalados: **D-17** (perfis com expressões acentuadas estão inertes),
+**D-18** (PDFs truncados são registrados como processados com sucesso) e
+**D-21** (o documento submetido não é arquivado, então nenhuma importação que
+falha é recuperável).

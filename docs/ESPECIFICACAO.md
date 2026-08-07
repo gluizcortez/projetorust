@@ -24,6 +24,7 @@
 4. [Pipeline de normalização de texto](#4-pipeline-de-normalização-de-texto)
 5. [Semântica do laço de recorte](#5-semântica-do-laço-de-recorte)
 6. [Ciclo de vida do processo](#6-ciclo-de-vida-do-processo)
+7. [Evoluções atrás de chave — o que NÃO é contrato do legado](#7-evoluções-atrás-de-chave--o-que-não-é-contrato-do-legado)
 
 ---
 
@@ -225,6 +226,10 @@ analisa as partes à mão por causa disso; ver
 **Sem limite de tamanho de corpo e sem validação de tipo do arquivo.** Qualquer
 arquivo enviado no campo `pdf` é aceito; a falha só aparece no processamento
 assíncrono, como status −1.
+
+> As chaves `MAX_UPLOAD_BYTES` e `VALIDAR_ASSINATURA_PDF` mudam isso — e as duas
+> nascem desligadas, justamente para que o descrito acima continue sendo o
+> comportamento padrão. Ver §7.
 
 ### 1.5 Rota inexistente e método não permitido — **MEDIDO**
 
@@ -762,3 +767,65 @@ dentro da tarefa. O registro `Processo de recorte FINALIZADO` sai junto.
 Um pânico dentro da tarefa de fundo **não derruba o processo** — o `tokio`
 o captura na `JoinHandle`, que é descartada. A importação fica presa no último
 status gravado. Ver §3.5.
+
+---
+
+## 7. Evoluções atrás de chave — o que NÃO é contrato do legado
+
+Tudo o que esta especificação descreve das seções 1 a 6 é o comportamento do
+serviço original, reproduzido pelo porte em Go. Esta seção existe para marcar a
+fronteira: o que vem a seguir **não** está no legado, e **não** acontece com a
+configuração no padrão.
+
+### 7.1 A regra
+
+> Toda evolução tem uma chave de configuração cujo valor padrão reproduz
+> exatamente o legado. **Nenhuma liga por padrão.**
+
+Portanto: uma instância com o ambiente vazio — a não ser pelos dois segredos
+obrigatórios — se comporta como as seções 1 a 6 descrevem, byte a byte. É o que
+a suíte de paridade verifica.
+
+### 7.2 O que cada chave acrescenta
+
+| Chave | O que passa a existir |
+|---|---|
+| `MAX_UPLOAD_BYTES` | Resposta **400** com a crítica `PDF excede o tamanho máximo` (D-16, opção B). |
+| `VALIDAR_ASSINATURA_PDF` | Recusa síncrona de arquivo sem o prefixo `%PDF-`, com **a mesma 422 e o mesmo texto** de §1.4.4 — nenhum literal novo. |
+| `RESPOSTA_PROBLEM_JSON` | Respostas de **erro** (≥ 400) em `application/problem+json`. As de sucesso permanecem em `text/plain`. |
+| `RATE_LIMIT_RPS` | Resposta **429** com `Retry-After`, e o literal `Limite de requisições excedido`. |
+| `STATUS_ENDPOINT` | Rota `GET /importacao/{id}`, em JSON. Adição pura. |
+| `HEALTH_ENDPOINTS` | Rotas `/health/live` e `/health/ready`. **`/ping` não muda** — §1.3 continua valendo integralmente. |
+| `MAX_IMPORTACOES_CONCORRENTES` | Fila de submissões acima do teto. **A resposta HTTP não muda**; muda a latência. |
+| `GRAVACAO_EM_LOTE` | Dois comandos por chave de pesquisa em vez de dois por recorte. **O estado do banco é idêntico** (§5), incluindo `dt_recorte`. |
+| `IDEMPOTENCIA_POR_HASH` | Reenvio de documento **finalizado** devolve o id existente, com **a mesma resposta 200** de §1.4.3, sem registrar importação nova. |
+| `VARREDURA_ORFAS` | Tarefa periódica sobre importações paradas em 1–3 (§3.5). Com a política padrão, apenas registra e conta. |
+
+### 7.3 Os três literais que só existem com chave ligada
+
+Nenhum deles aparece em `reference/main.rs`; todos são inalcançáveis com a
+configuração no padrão.
+
+| Literal | Chave | Código |
+|---|---|---|
+| `PDF excede o tamanho máximo` | `MAX_UPLOAD_BYTES` | 400 |
+| `Limite de requisições excedido` | `RATE_LIMIT_RPS` | 429 |
+| `Importação não encontrada`, `Identificador inválido`, `Erro ao consultar a importação` | `STATUS_ENDPOINT` | 404, 400, 500 |
+| `vivo`, `pronto`, `indisponível` | `HEALTH_ENDPOINTS` | 200, 200, 503 |
+
+### 7.4 O que NÃO existe, e por quê
+
+**Reprocessamento automático de importação presa.** A varredura não pode
+reprocessar porque o serviço **não guarda o documento**: `tb_importacao` tem o
+nome original e o resumo SHA-256, e os bytes do PDF são descartados com a
+tarefa. Ver `docs/DECISOES-ABERTAS.md`, **D-21**.
+
+Consequência que vale além da varredura: **toda importação que falha é perda
+definitiva de trabalho**, para qualquer causa. A única recuperação é o cliente
+reenviar o documento.
+
+### 7.5 Onde está o resto
+
+Valores recomendados, ordem de ativação e o cálculo de memória do teto de
+concorrência estão em `docs/OPERACAO.md`. O contrato em formato legível por
+máquina, com as adições marcadas, está em `api/openapi.yaml`.

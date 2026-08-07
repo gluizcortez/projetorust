@@ -159,3 +159,119 @@ func esperarPorta(t *testing.T, servico *app.App) string {
 		}
 	}
 }
+
+// -------------------------------------------------------------------------
+// Fase F11 — a montagem com TODAS as chaves ligadas
+// -------------------------------------------------------------------------
+
+// TestIntegracaoTodasAsChavesLigadas monta o grafo com as dez evoluções ativas.
+//
+// Não é teste de comportamento de cada uma — isso está nos pacotes de origem. É
+// teste de FIAÇÃO: com todas ligadas, o grafo precisa montar, subir, servir as
+// rotas novas e encerrar limpo. Uma porta esquecida em app.Novo só aparece aqui.
+func TestIntegracaoTodasAsChavesLigadas(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL não definida — rode `make test-integration`")
+	}
+
+	t.Setenv("DATABASE_URL", dsn)
+	t.Setenv("API_KEY", "chave-de-integracao")
+	t.Setenv("SERVIDOR_IP", "127.0.0.1")
+	t.Setenv("SERVIDOR_PORTA", "0")
+
+	for _, chave := range []string{
+		"IDEMPOTENCIA_POR_HASH", "GRAVACAO_EM_LOTE", "VALIDAR_ASSINATURA_PDF",
+		"VARREDURA_ORFAS", "RESPOSTA_PROBLEM_JSON", "STATUS_ENDPOINT", "HEALTH_ENDPOINTS",
+	} {
+		t.Setenv(chave, "true")
+	}
+	t.Setenv("MAX_UPLOAD_BYTES", "1048576")
+	t.Setenv("MAX_IMPORTACOES_CONCORRENTES", "2")
+	t.Setenv("RATE_LIMIT_RPS", "100")
+	// Intervalo curto para que a varredura RODE de verdade durante o teste, em
+	// vez de apenas ser montada.
+	t.Setenv("VARREDURA_ORFAS_INTERVALO", "1s")
+	t.Setenv("VARREDURA_ORFAS_LIMIAR", "1s")
+	t.Setenv("VARREDURA_ORFAS_POLITICA", "observar")
+
+	cfg, err := config.Carregar(context.Background())
+	if err != nil {
+		t.Fatalf("Carregar: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	ctx, cancelarMontagem := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelarMontagem()
+
+	servico, err := app.Novo(ctx, cfg, logger, nil, observability.NovasMetricas(),
+		"integracao", "abc123", func() string { return "teste" })
+	if err != nil {
+		t.Fatalf("app.Novo com todas as chaves ligadas: %v", err)
+	}
+
+	execucao, sinal := context.WithCancel(context.Background())
+	resultado := make(chan error, 1)
+	go func() { resultado <- servico.Executar(execucao, nil) }()
+
+	endereco := esperarPorta(t, servico)
+	cliente := &http.Client{Timeout: 5 * time.Second}
+
+	t.Run("ping continua exatamente igual", func(t *testing.T) {
+		resp, err := cliente.Get("http://" + endereco + "/ping")
+		if err != nil {
+			t.Fatalf("GET /ping: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		corpo, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || string(corpo) != "pong" {
+			t.Errorf("status %d, corpo %q; /ping é contrato existente", resp.StatusCode, corpo)
+		}
+	})
+
+	t.Run("sondas de saúde respondem", func(t *testing.T) {
+		for _, caminho := range []string{"/health/live", "/health/ready"} {
+			resp, err := cliente.Get("http://" + endereco + caminho)
+			if err != nil {
+				t.Fatalf("GET %s: %v", caminho, err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s devolveu %d; com banco de pé deveria aprovar", caminho, resp.StatusCode)
+			}
+		}
+	})
+
+	t.Run("status de importação inexistente devolve problem+json", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+endereco+"/importacao/999999", nil)
+		req.Header.Set("X-API-KEY", "chave-de-integracao")
+		resp, err := cliente.Do(req)
+		if err != nil {
+			t.Fatalf("GET /importacao/999999: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d; esperava 404", resp.StatusCode)
+		}
+		// RESPOSTA_PROBLEM_JSON também está ligada: os ERROS mudam de formato.
+		if tipo := resp.Header.Get("Content-Type"); tipo != "application/problem+json" {
+			t.Errorf("Content-Type = %q; esperava problem+json", tipo)
+		}
+	})
+
+	// Dá tempo de a varredura rodar ao menos uma passagem — o que exercita a
+	// transação, o SELECT ... FOR UPDATE SKIP LOCKED e o commit.
+	time.Sleep(2500 * time.Millisecond)
+
+	sinal()
+	select {
+	case err := <-resultado:
+		if err != nil {
+			t.Fatalf("Executar: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Executar não retornou em 30s")
+	}
+}

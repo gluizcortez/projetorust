@@ -28,10 +28,11 @@
 | D-13 | Qual o esquema real das sete tabelas? | F4 | aberta | operação |
 | D-14 | A infraestrutura permite espelhar tráfego? | F12 | aberta | infraestrutura |
 | D-15 | Onde estão o `Cargo.toml` e o `Cargo.lock` originais? | **F0, F6** | aberta · **BLOQUEANTE** | quem mantém o Rust |
-| D-16 | Qual o limite prático de resposta para `MAX_UPLOAD_BYTES`? | F11 | aberta | produto |
+| D-16 | Qual o limite prático de resposta para `MAX_UPLOAD_BYTES`? | F11 | **implementada na F11** · opção B | produto |
 | D-17 | Quantos perfis têm expressões acentuadas (hoje inertes)? | — | aberta · **escalar a produto** | produto |
 | D-18 | PDFs truncados chegam em produção? | — | aberta · **escalar a produto** | operação |
 | D-20 | O rodapé "salvo" pode sair das páginas de 404 e 405? | — | aberta | produto |
+| D-21 | O documento submetido passa a ser arquivado? | F11 (varredura) | **aberta** · descoberta na F11 | produto |
 
 ---
 
@@ -592,6 +593,28 @@ ordem das cinco existentes. Só entra em vigor com a chave ligada.
 
 **Decisão de produto.** Precisa de confirmação antes de F11.
 
+### Implementado na fase F11 — com uma correção do enunciado
+
+A opção B foi implementada: `domain.CriticaPDFAcimaDoLimite`, com o texto
+`PDF excede o tamanho máximo`, resposta **400**.
+
+**O enunciado desta decisão estava errado num detalhe.** Ele dizia "acrescenta a
+crítica ao final da lista, preservando a ordem das cinco existentes", supondo
+que a crítica nova conviveria com as do legado. Ela **não convive**: a leitura
+do corpo aborta assim que o limite estoura, e nesse ponto os campos de texto
+ainda não foram lidos — não há como saber se a data do caderno também faltava.
+A crítica sai **sozinha**.
+
+Não é problema: um cliente que recebe 400 com uma única crítica a interpreta com
+o mesmo código que usa para as demais. Mas quem for confirmar a decisão precisa
+saber que a resposta é essa, e não a combinação.
+
+**A fase F9 havia deixado 422 como provisório** neste caminho, antes de a decisão
+existir. `TestLimiteDeCorpoLigadoRecusa` foi corrigido junto.
+
+**O que ainda depende de produto.** Confirmar a opção B — e, se ela for aceita,
+o valor do limite, que depende de **D-04**.
+
 ---
 
 ## D-17 · Quantos perfis têm expressões acentuadas? — **escalar a produto**
@@ -695,3 +718,63 @@ alteração de corpo de resposta e precisa de decisão explícita.
 Convém decidir junto com **D-15**: se a versão de produção do Salvo tiver outro
 HTML, o byte a byte atual está errado de qualquer forma e as duas coisas se
 resolvem na mesma passada.
+
+---
+
+## D-21 · O documento submetido passa a ser arquivado? — **descoberta na F11**
+
+**Como apareceu.** A fase F11 pede, para `VARREDURA_ORFAS`, uma política que
+"reprocesse ou marque como −1, conforme política configurável". Ao implementar,
+verificou-se que **reprocessar é impossível**.
+
+**Por quê.** O serviço não guarda o documento. `recorte.tb_importacao` tem
+`nome_original_pdf` e `hash`, e nada mais; os bytes do PDF vivem em memória
+durante o processamento e são descartados junto com a tarefa. Não há gravação em
+disco, em objeto ou em coluna binária — nem no legado nem no porte. Reprocessar
+exigiria buscar o arquivo em algum lugar, e **não há lugar**.
+
+Isso não é limitação da implementação: é o desenho do legado.
+
+**Consequência imediata.** As políticas implementadas são `observar` (padrão,
+apenas registra e conta) e `erro` (grava −1). `reprocessar` é recusada pela
+configuração, com mensagem que aponta para esta decisão.
+
+**Consequência maior, e a razão de a pergunta existir.** Toda importação que
+falha é **perda definitiva de trabalho**. Não há reprocessamento possível para
+nenhuma causa — nem para as que já existem hoje: status −1 por PDF corrompido,
+importação presa por expressão inválida (D-06), tarefa morta por queda do
+processo. Em todos os casos, a única recuperação é **o cliente reenviar o
+documento**, e isso depende de alguém perceber e pedir.
+
+**Como verificar o tamanho do problema.**
+```sql
+-- importações que terminaram em erro, por mês
+SELECT date_trunc('month', data_caderno) AS mes, count(*)
+FROM recorte.tb_importacao WHERE status = -1
+GROUP BY 1 ORDER BY 1 DESC;
+
+-- importações presas: em 1..3 há mais de um dia
+SELECT status, count(*)
+FROM recorte.tb_importacao
+WHERE status IN (1, 2, 3) AND data_inicio < current_timestamp - interval '1 day'
+GROUP BY 1;
+```
+
+Volume desprezível significa que arquivar não se paga. Volume relevante
+significa que hoje se perde trabalho em silêncio.
+
+**Opções, se a resposta for "sim, arquivar".**
+
+| Opção | Onde | Custo | Observação |
+|---|---|---|---|
+| A | Armazenamento de objetos (S3 ou compatível) | dependência nova + credencial | O usual. O hash já existente serve de chave. |
+| B | Diretório em volume persistente | nenhum código novo de dependência | Não sobrevive a contêiner efêmero sem volume; complica escalar horizontalmente. |
+| C | Coluna `bytea` em `tb_importacao` | nenhuma dependência | Infla a tabela mais consultada do esquema. Não recomendado. |
+
+**Padrão provisório.** **Não arquivar**, que é o comportamento atual. A
+varredura fica com as duas políticas que não dependem do documento. Nenhuma
+mudança de comportamento é introduzida por esta decisão ficar aberta.
+
+**Encaminhamento.** É decisão de produto e de infraestrutura, não de
+arquitetura: envolve custo de armazenamento, retenção e possivelmente
+tratamento de dado pessoal contido nos diários.

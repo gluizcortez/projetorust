@@ -33,6 +33,45 @@ var arquivoRecorteInserir string
 //go:embed queries/recorte_texto_inserir.sql
 var arquivoRecorteTextoInserir string
 
+// -------------------------------------------------------------------------
+// Consultas de EVOLUÇÃO — fase F11
+// -------------------------------------------------------------------------
+//
+// As cinco abaixo NÃO existem no legado e por isso vivem em queries/f11/, sem o
+// marcador de consulta literal e fora de ConsultasLiterais(): não há original
+// com que compará-las. Todas só são executadas com a chave correspondente
+// ligada — com os padrões, o serviço emite exatamente as sete consultas do
+// legado, nem uma a mais.
+
+//go:embed queries/f11/importacao_resumo.sql
+var sqlImportacaoResumo string
+
+//go:embed queries/f11/importacao_equivalente.sql
+var sqlImportacaoEquivalente string
+
+//go:embed queries/f11/importacoes_presas.sql
+var sqlImportacoesPresas string
+
+//go:embed queries/f11/recorte_inserir_lote.sql
+var sqlRecorteInserirLote string
+
+//go:embed queries/f11/recorte_texto_inserir_lote.sql
+var sqlRecorteTextoInserirLote string
+
+// ConsultasDeEvolucao expõe as consultas novas para os testes.
+//
+// Existe para que o teste de paridade textual possa AFIRMAR que nenhuma delas
+// aparece em ConsultasLiterais: as duas listas precisam ser disjuntas.
+func ConsultasDeEvolucao() map[string]string {
+	return map[string]string{
+		"importacao_resumo":          sqlImportacaoResumo,
+		"importacao_equivalente":     sqlImportacaoEquivalente,
+		"importacoes_presas":         sqlImportacoesPresas,
+		"recorte_inserir_lote":       sqlRecorteInserirLote,
+		"recorte_texto_inserir_lote": sqlRecorteTextoInserirLote,
+	}
+}
+
 // marcadorDeConsulta separa o cabeçalho explicativo do texto literal.
 //
 // O cabeçalho documenta a origem e as armadilhas de cada consulta; o que vai

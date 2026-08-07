@@ -1634,3 +1634,181 @@ teste de integração da F4 em diante roda neste ambiente.
    `VALIDAR_ASSINATURA_PDF`, `VARREDURA_ORFAS`, `RATE_LIMIT_RPS`,
    `STATUS_ENDPOINT`, `HEALTH_ENDPOINTS` — já existem na configuração, são lidas
    e ainda não têm efeito. É o trabalho da próxima fase.
+
+---
+
+## F11 — Evoluções técnicas atrás de chaves
+
+**Objetivo.** Endereçar os achados restantes como capacidades opcionais. Toda
+evolução nasce desligada, e o serviço com todas as chaves no padrão continua
+indistinguível do legado.
+
+### As dez chaves, e onde cada uma vive
+
+| Chave | Camada | Arquivo |
+|---|---|---|
+| `MAX_IMPORTACOES_CONCORRENTES` | executor | `platform/worker/pool.go` (F8) + observador de fila (F11) |
+| `MAX_UPLOAD_BYTES` | HTTP | `httpapi/middleware` + `httpapi/multipart.go` |
+| `VALIDAR_ASSINATURA_PDF` | **caso de uso** | `usecase/ingerir.go` |
+| `GRAVACAO_EM_LOTE` | persistência | `postgres/recorte_repo.go` |
+| `IDEMPOTENCIA_POR_HASH` | caso de uso + persistência | `usecase/ingerir.go`, `postgres/consulta_repo.go` |
+| `VARREDURA_ORFAS` | caso de uso + plataforma | `usecase/varrer.go`, `platform/periodico` |
+| `RESPOSTA_PROBLEM_JSON` | HTTP | `httpapi/resposta` (F9, corrigida aqui) |
+| `RATE_LIMIT_RPS` | HTTP | `httpapi/middleware/taxa.go` |
+| `STATUS_ENDPOINT` | HTTP + persistência | `httpapi/adicoes.go`, `postgres/consulta_repo.go` |
+| `HEALTH_ENDPOINTS` | HTTP | `httpapi/adicoes.go` |
+
+A fiação condicional passa toda por **uma** função na raiz de composição,
+`app.seSim`: chave desligada devolve o ZERO do tipo, e porta nula é o que
+desliga a evolução. Espalhar esse `if` por sete pontos de montagem seria sete
+chances de ligar algo por acidente.
+
+### Três coisas que a fase mudou no que já existia
+
+**1. `RESPOSTA_PROBLEM_JSON` estava trocando o corpo do SUCESSO.** O escritor da
+F9 era aplicado a toda resposta, então ligar a chave fazia `/ping` responder
+`{"type":"about:blank","title":"OK","status":200,"detail":"pong"}` em vez de
+`pong`. A RFC 7807 descreve documento de **problema**; um 200 não é um. Corrigido
+com `resposta.EhProblema`, que corta em 400.
+
+O defeito só apareceu no teste de montagem com **todas** as chaves ligadas — a
+única configuração em que `RESPOSTA_PROBLEM_JSON` se cruza com uma verificação
+do corpo de `/ping`. O teste da F9 afirmava o comportamento errado e foi
+invertido.
+
+**2. O 422 de `MAX_UPLOAD_BYTES` virou 400 com crítica.** A F9 deixou 422 como
+provisório, antes de D-16 existir. Agora é a opção B da decisão.
+
+**3. `NovoRepositorioRecorte` e `NovoPool` ganharam opções variádicas.** A
+chamada sem opção continua válida e continua significando "modo do legado".
+
+### O que a especificação da fase pedia e não pôde ser feito
+
+> "6. VARREDURA DE ÓRFÃS … as **reprocessa** ou marca como −1, conforme política
+> configurável."
+
+**Reprocessar é impossível: o serviço não guarda o documento.** `tb_importacao`
+tem `nome_original_pdf` e `hash`; os bytes do PDF vivem em memória durante o
+processamento e são descartados com a tarefa. Não há gravação em disco, em
+objeto nem em coluna binária — nem no legado nem no porte.
+
+Isso foi registrado como **D-21**, com as opções de arquivamento e o custo de
+cada uma. As políticas implementadas são `observar` (padrão) e `erro`;
+`reprocessar` é recusada pela configuração com mensagem que aponta para a
+decisão.
+
+A descoberta é maior que a varredura: **toda importação que falha é perda
+definitiva de trabalho**, para qualquer causa — PDF corrompido, expressão
+inválida (D-06), queda do processo. A única recuperação é o cliente reenviar.
+
+### Decisões de desenho que merecem registro
+
+**A assinatura de PDF é verificada DEPOIS da validação.** Uma submissão que erra
+a data e manda um arquivo que não é PDF continua recebendo o 400 com as
+críticas, em vez de trocá-lo por um 422 menos informativo. O efeito da chave se
+limita ao que o legado **aceitaria**. E a resposta usa o texto que já existe —
+a especificação da fase é explícita: "a MESMA 422 do legado, sem texto novo".
+
+**A idempotência só reaproveita a importação FINALIZADA.** Uma em curso faria o
+cliente herdar uma tarefa que ainda pode falhar; uma em −1 impediria justamente
+o reenvio que corrige o erro. E falha na consulta **não derruba a submissão**:
+banco fora do ar para o `SELECT` segue o caminho do legado. A evolução é
+otimização, não regra de negócio.
+
+**A chave de idempotência tem três campos**, não só o hash: o mesmo arquivo pode
+ser submetido legitimamente para outro caderno ou outra data.
+
+**O lote confere a ordem em vez de presumi-la.** `WITH ORDINALITY` mais
+`ORDER BY` faz o PostgreSQL inserir na ordem da entrada e o `RETURNING` sair na
+ordem de inserção — mas a página volta junto e é **comparada** com a esperada.
+Uma reordenação futura vira erro na hora, em vez de texto de recorte associado à
+página errada, que é corrupção silenciosa.
+
+**A varredura busca e trata na MESMA transação.** A trava de
+`FOR UPDATE SKIP LOCKED` só vale até o commit; soltá-la antes de gravar abriria
+a janela em que outra instância pega a mesma linha.
+
+**A política padrão da varredura é `observar`.** Uma varredura que já nasce
+escrevendo pode marcar como erro um lote de importações que estavam apenas
+lentas — e não há como desfazer.
+
+**`/health/live` não consulta nada.** Uma sonda de vivacidade que dependa do
+banco faz o orquestrador REINICIAR o serviço quando o banco cai: não conserta o
+banco e derruba as importações em andamento.
+
+**O limitador de taxa usa a chave de API, não o IP.** Atrás de balanceador o IP
+é o do balanceador. O balde é por processo, então com N instâncias o limite
+efetivo é `N × RATE_LIMIT_RPS` — está em `OPERACAO.md`.
+
+### As sabotagens que provaram os testes
+
+| Sabotagem | Teste que pegou |
+|---|---|
+| Remover `SKIP LOCKED` da consulta de órfãs | `TestIntegracaoDuasInstanciasNaoPegamAMesmaImportacao` — a segunda instância bloqueia e o prazo de 15 s a converte em falha, não em travamento |
+| Trocar `ORDER BY entrada.ordem` por `ORDER BY nr_pagina DESC` no lote | `TestIntegracaoLoteProduzOMesmoEstadoQueLinhaALinha` e `TestIntegracaoLotePreservaAOrdemComPaginasEmbaralhadas` — a conferência de pareamento acusa antes de gravar |
+
+O teste de concorrência recebeu um **prazo por goroutine** exatamente para que a
+sabotagem produza falha limpa: sem ele, um `FOR UPDATE` simples faria a segunda
+instância esperar pela primeira, que espera na barreira, e o teste penduraria
+até o tempo limite do `go test`.
+
+Um detalhe do próprio teste teve de ser corrigido: com lote **igual** ao acervo,
+a primeira instância leva tudo e a segunda volta vazia — comportamento correto,
+mas que não exercita disputa alguma. O lote é metade, como em produção.
+
+### Migração
+
+`db/migrations/0002_idempotencia_indice.{up,down}.sql`. **Nenhum dos dois roda
+dentro de transação** — `CREATE INDEX CONCURRENTLY` e `DROP INDEX CONCURRENTLY`
+são recusados em bloco transacional.
+
+O índice **não é único**: um banco de produção já tem duplicatas, porque o
+legado nunca deduplicou. Um índice único falharia na criação e, passando,
+recusaria reenvios que hoje são aceitos — mudança de comportamento com a chave
+**desligada**.
+
+### Um alvo do Makefile consertado
+
+`make test-integration` roda `./...`, e os pacotes de teste do Go rodam **em
+paralelo entre si**. `internal/adapter/postgres` faz `DROP SCHEMA recorte
+CASCADE` a cada teste, no MESMO banco que `internal/app` e `test/e2e` consultam.
+
+Até esta fase ninguém notava: o teste de montagem da F10 só exercitava `/ping` e
+o 401, que não tocam em tabela. O teste novo consulta `tb_importacao` — e uma
+execução falhou, sem se reproduzir nas onze seguintes. A janela é curta e o
+sintoma seria um 500 onde o teste espera 404.
+
+Corrigido com `-p 1`, que serializa os pacotes. Um banco por pacote seria a
+alternativa; serializar custa alguns segundos e não exige infraestrutura nova.
+
+### Medições
+
+```
+go build ./...                                                   OK
+golangci-lint run ./...                                          0 issues
+go test ./... -race                                              todos os pacotes passando
+go test ./... -tags integration                                  todos os pacotes passando
+npx @redocly/cli lint api/openapi.yaml                           válido, 0 avisos
+test/parity (todas as chaves no padrão)                          passando
+```
+
+Nenhuma dependência nova.
+
+### Documentação entregue
+
+| Documento | Conteúdo |
+|---|---|
+| `api/openapi.yaml` | Contrato atual e adições, com `x-chave` marcando o que depende de configuração |
+| `docs/OPERACAO.md` | Tabela de chaves, ordem de ativação, valores por porte de carga, o cálculo de memória do teto, métricas e alarmes |
+
+### Pendências que entram na F12
+
+1. **D-11** e **D-15** seguem bloqueantes — e agora bloqueiam a própria F12.
+2. **D-04** governa os valores recomendados de `OPERACAO.md` e continua aberta.
+3. **D-16** implementada com a opção B; falta a confirmação de produto, e o
+   enunciado da decisão foi corrigido (a crítica sai sozinha, não ao final da
+   lista das cinco).
+4. **D-21** aberta, e é a de maior alcance das novas: sem arquivar o documento,
+   nenhuma importação falha é recuperável.
+5. **D-05**, **D-06**, **D-13**, **D-14**, **D-18**, **D-20**: abertas.
+6. **INV-P10** continua sem exercício (herdado da F5).

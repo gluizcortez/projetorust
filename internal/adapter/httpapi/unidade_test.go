@@ -95,23 +95,37 @@ func TestEscolherEscritor(t *testing.T) {
 	}
 }
 
-// TestProblemJSONEmTodasAsRespostas confere que a evolução cobre também as
-// respostas que não têm críticas.
-func TestProblemJSONEmTodasAsRespostas(t *testing.T) {
+// TestProblemJSONSoTrocaOsErros.
+//
+// A chave promete trocar o corpo das respostas de ERRO, e é só isso que ela
+// pode fazer: um 200 não é um problema, e a RFC 7807 descreve documento de
+// problema. `/ping` respondendo `{"title":"OK"}` seria mudança de contrato
+// existente sob uma chave que não a anuncia.
+//
+// Esta era a asserção INVERTIDA até a fase F11 — o teste exigia problem+json
+// também no sucesso, e o código obedecia. O defeito apareceu no teste de
+// montagem com todas as chaves ligadas, que é a única configuração em que
+// RESPOSTA_PROBLEM_JSON se cruza com uma verificação do corpo de /ping.
+func TestProblemJSONSoTrocaOsErros(t *testing.T) {
 	casos := []struct {
 		nome       string
 		requisicao func() *http.Request
 		codigo     int
+		ehProblema bool
+		corpo      string
 	}{
 		{"ping", func() *http.Request {
 			return httptest.NewRequest(http.MethodGet, httpapi.RotaPing, nil)
-		}, http.StatusOK},
-		{"sem chave", func() *http.Request {
-			return requisicaoPDF(submissaoCompleta(), nil)
-		}, http.StatusUnauthorized},
+		}, http.StatusOK, false, httpapi.TextoPong},
 		{"sucesso", func() *http.Request {
 			return requisicaoPDF(submissaoCompleta(), texto(chaveDeTeste))
-		}, http.StatusOK},
+		}, http.StatusOK, false, httpapi.TextoSucesso},
+		{"sem chave", func() *http.Request {
+			return requisicaoPDF(submissaoCompleta(), nil)
+		}, http.StatusUnauthorized, true, ""},
+		{"validação", func() *http.Request {
+			return requisicaoPDF(corpoMultipart(), texto(chaveDeTeste))
+		}, http.StatusBadRequest, true, ""},
 	}
 
 	for _, c := range casos {
@@ -125,13 +139,46 @@ func TestProblemJSONEmTodasAsRespostas(t *testing.T) {
 			if w.Code != c.codigo {
 				t.Errorf("status = %d; esperava %d", w.Code, c.codigo)
 			}
-			if obtido := w.Header().Get("Content-Type"); obtido != resposta.TipoProblemJSON {
-				t.Errorf("Content-Type = %q", obtido)
+
+			tipo := w.Header().Get("Content-Type")
+			if c.ehProblema {
+				if tipo != resposta.TipoProblemJSON {
+					t.Errorf("Content-Type = %q; esperava %q", tipo, resposta.TipoProblemJSON)
+				}
+				if !strings.Contains(w.Body.String(), `"status":`) {
+					t.Errorf("corpo não parece problem+json: %q", w.Body.String())
+				}
+				return
 			}
-			if !strings.Contains(w.Body.String(), `"status":`) {
-				t.Errorf("corpo não parece problem+json: %q", w.Body.String())
+
+			if tipo != resposta.TipoTexto {
+				t.Errorf("Content-Type = %q; sucesso continua em texto", tipo)
+			}
+			if w.Body.String() != c.corpo {
+				t.Errorf("corpo = %q; esperava o literal do legado %q", w.Body.String(), c.corpo)
 			}
 		})
+	}
+}
+
+// TestEhProblemaCortaEm400 fixa a fronteira em um só lugar.
+func TestEhProblemaCortaEm400(t *testing.T) {
+	casos := map[int]bool{
+		http.StatusOK:                  false,
+		http.StatusNoContent:           false,
+		http.StatusMovedPermanently:    false,
+		http.StatusBadRequest:          true,
+		http.StatusUnauthorized:        true,
+		http.StatusNotFound:            true,
+		http.StatusUnprocessableEntity: true,
+		http.StatusTooManyRequests:     true,
+		http.StatusInternalServerError: true,
+		http.StatusServiceUnavailable:  true,
+	}
+	for codigo, esperado := range casos {
+		if obtido := resposta.EhProblema(codigo); obtido != esperado {
+			t.Errorf("EhProblema(%d) = %t; esperava %t", codigo, obtido, esperado)
+		}
 	}
 }
 

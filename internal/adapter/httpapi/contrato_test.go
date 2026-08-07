@@ -50,6 +50,21 @@ type pilha struct {
 
 func montarPilha(t *testing.T, ajustar func(*httpapi.Dependencias, *domaintest.RepositorioImportacaoFalso)) *pilha {
 	t.Helper()
+	return montarPilhaCom(t, nil, ajustar)
+}
+
+// montarPilhaCom permite ajustar TAMBÉM as dependências da ingestão.
+//
+// Existe porque duas evoluções da fase F11 — VALIDAR_ASSINATURA_PDF e
+// IDEMPOTENCIA_POR_HASH — vivem no caso de uso, não no roteador: a resposta
+// delas é o 422 e o 200 que o legado já emite, e testá-las pelo roteador é
+// justamente o que prova que nenhum texto novo apareceu.
+func montarPilhaCom(
+	t *testing.T,
+	ajustarIngestao func(*usecase.DependenciasDaIngestao),
+	ajustar func(*httpapi.Dependencias, *domaintest.RepositorioImportacaoFalso),
+) *pilha {
+	t.Helper()
 
 	p := &pilha{
 		importacoes: &domaintest.RepositorioImportacaoFalso{
@@ -59,14 +74,19 @@ func montarPilha(t *testing.T, ajustar func(*httpapi.Dependencias, *domaintest.R
 		executor: &executorSincrono{},
 	}
 
-	ingestao, err := usecase.NovaIngestao(usecase.DependenciasDaIngestao{
+	depsDaIngestao := usecase.DependenciasDaIngestao{
 		Importacoes: p.importacoes,
 		Executor:    p.executor,
 		Logger:      loggerMudo(),
 		Processar: func(_ context.Context, id int64, _ []byte) {
 			p.processadas = append(p.processadas, id)
 		},
-	})
+	}
+	if ajustarIngestao != nil {
+		ajustarIngestao(&depsDaIngestao)
+	}
+
+	ingestao, err := usecase.NovaIngestao(depsDaIngestao)
 	if err != nil {
 		t.Fatalf("NovaIngestao: %v", err)
 	}

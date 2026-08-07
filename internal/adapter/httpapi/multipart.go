@@ -33,6 +33,29 @@ type submissaoLida struct {
 // ErrCorpoInvalido indica corpo multipart que não pôde ser analisado.
 var ErrCorpoInvalido = errors.New("corpo multipart inválido")
 
+// ErrCorpoAcimaDoLimite indica corpo que estourou MAX_UPLOAD_BYTES.
+//
+// É SEPARADO de ErrCorpoInvalido porque as duas falhas têm respostas
+// diferentes: corpo malformado é o 422 do legado, e corpo grande demais é o 400
+// com crítica da opção B de D-16. Com a chave no padrão (zero) este erro é
+// inalcançável — não há limite a estourar.
+var ErrCorpoAcimaDoLimite = errors.New("corpo acima do limite configurado")
+
+// erroDeLeitura classifica uma falha de leitura do corpo.
+//
+// `http.MaxBytesError` é o que `http.MaxBytesReader` produz quando o LIMITE DA
+// REQUISIÇÃO INTEIRA estoura, instalado pelo middleware LimiteDeCorpo. Ele pode
+// aparecer em qualquer leitura — ao avançar para a próxima parte, ao ler um
+// campo de texto ou ao copiar o arquivo —, então a classificação fica num só
+// lugar em vez de repetida em cada ponto de erro.
+func erroDeLeitura(err error) error {
+	var excedido *http.MaxBytesError
+	if errors.As(err, &excedido) {
+		return fmt.Errorf("%w: %w", ErrCorpoAcimaDoLimite, err)
+	}
+	return fmt.Errorf("%w: %w", ErrCorpoInvalido, err)
+}
+
 // lerSubmissao analisa o corpo multipart reproduzindo as decisões do Salvo.
 //
 // # Por que não `r.ParseMultipartForm`
@@ -73,7 +96,7 @@ var ErrCorpoInvalido = errors.New("corpo multipart inválido")
 func lerSubmissao(r *http.Request, maxMemoria int64) (submissaoLida, error) {
 	partes, err := r.MultipartReader()
 	if err != nil {
-		return submissaoLida{}, fmt.Errorf("%w: %w", ErrCorpoInvalido, err)
+		return submissaoLida{}, erroDeLeitura(err)
 	}
 
 	var (
@@ -90,7 +113,7 @@ func lerSubmissao(r *http.Request, maxMemoria int64) (submissaoLida, error) {
 			break
 		}
 		if err != nil {
-			return submissaoLida{}, fmt.Errorf("%w: %w", ErrCorpoInvalido, err)
+			return submissaoLida{}, erroDeLeitura(err)
 		}
 
 		nome := parte.FormName()
@@ -124,7 +147,7 @@ func lerSubmissao(r *http.Request, maxMemoria int64) (submissaoLida, error) {
 		valor, err := io.ReadAll(io.LimitReader(parte, limiteDeCampoDeTexto))
 		_ = parte.Close()
 		if err != nil {
-			return submissaoLida{}, fmt.Errorf("%w: campo %q: %w", ErrCorpoInvalido, nome, err)
+			return submissaoLida{}, fmt.Errorf("campo %q: %w", nome, erroDeLeitura(err))
 		}
 		definidos[nome] = true
 		guardarCampo(&lida.submissao, nome, string(valor))
@@ -194,7 +217,7 @@ func guardarCampo(s *domain.SubmissaoPDF, nome, valor string) {
 func copiarLimitado(destino *strings.Builder, origem io.Reader, maxBytes int64) error {
 	if maxBytes <= 0 {
 		if _, err := io.Copy(destino, origem); err != nil {
-			return fmt.Errorf("%w: lendo o arquivo: %w", ErrCorpoInvalido, err)
+			return fmt.Errorf("lendo o arquivo: %w", erroDeLeitura(err))
 		}
 		return nil
 	}
@@ -202,10 +225,10 @@ func copiarLimitado(destino *strings.Builder, origem io.Reader, maxBytes int64) 
 	// Lê um byte a mais que o permitido: se ele vier, o limite foi excedido.
 	n, err := io.Copy(destino, io.LimitReader(origem, maxBytes+1))
 	if err != nil {
-		return fmt.Errorf("%w: lendo o arquivo: %w", ErrCorpoInvalido, err)
+		return fmt.Errorf("lendo o arquivo: %w", erroDeLeitura(err))
 	}
 	if n > maxBytes {
-		return fmt.Errorf("%w: arquivo acima de %d bytes", ErrCorpoInvalido, maxBytes)
+		return fmt.Errorf("%w: arquivo acima de %d bytes", ErrCorpoAcimaDoLimite, maxBytes)
 	}
 	return nil
 }

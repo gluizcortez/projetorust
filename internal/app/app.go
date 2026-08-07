@@ -24,6 +24,7 @@ import (
 	"github.com/gluizcortez/projetorust/internal/config"
 	"github.com/gluizcortez/projetorust/internal/domain"
 	"github.com/gluizcortez/projetorust/internal/platform/observability"
+	"github.com/gluizcortez/projetorust/internal/platform/periodico"
 	"github.com/gluizcortez/projetorust/internal/platform/worker"
 	"github.com/gluizcortez/projetorust/internal/usecase"
 )
@@ -55,6 +56,10 @@ type App struct {
 	// próprio em vez de abrir uma porta de verdade.
 	escutar func(rede, endereco string) (net.Listener, error)
 
+	// varredura é o laço da chave VARREDURA_ORFAS. NULA com a chave no padrão,
+	// e o encerramento a ignora nesse caso.
+	varredura *periodico.Laco
+
 	// motivo descreve por que o encerramento começou. Quem sabe disso é o
 	// ouvinte de sinais, que nomeia SIGINT e SIGTERM separadamente — o legado
 	// também os distingue, com mensagens diferentes (ESPECIFICACAO §6.2).
@@ -84,6 +89,9 @@ type Dependencias struct {
 
 	// Pool pode ser nulo quando não há banco (testes de ciclo de vida).
 	Pool *pgxpool.Pool
+
+	// Varredura é o laço de VARREDURA_ORFAS. Nulo quando a chave está no padrão.
+	Varredura *periodico.Laco
 	// EncerrarTracing pode ser nula.
 	EncerrarTracing observability.Encerrar
 
@@ -125,6 +133,7 @@ func Montar(d Dependencias) (*App, error) {
 		servidor:        d.Servidor,
 		executor:        d.Executor,
 		pool:            d.Pool,
+		varredura:       d.Varredura,
 		encerrarTracing: encerrar,
 		escutar:         net.Listen,
 		motivo:          d.Motivo,
@@ -155,6 +164,10 @@ func Montar(d Dependencias) (*App, error) {
 //  13. ingestão                        usecase.NovaIngestao
 //  14. roteador                        httpapi.NovoRouter
 //  15. servidor                        httpapi.NovoServidor
+//
+// As construções condicionais da fase F11 — repositório de consulta, varredura
+// de órfãs — entram entre a 8 e a 13, e SÓ existem com a chave correspondente
+// ligada. Com os padrões, a lista acima é exatamente o que é montado.
 func Novo(
 	ctx context.Context,
 	cfg *config.Config,
@@ -171,11 +184,18 @@ func Novo(
 		return nil, fmt.Errorf("montando o pool de conexões: %w", err)
 	}
 
-	// 5 a 8 — persistência.
+	// 5 a 8 — persistência. A gravação em lote é a única evolução que muda um
+	// repositório existente; desligada, ele é o do legado.
 	uow := postgres.NovaUnidadeDeTrabalho(pool)
 	importacoes := postgres.NovoRepositorioImportacao(pool)
 	perfis := postgres.NovoRepositorioPerfil(pool)
-	recortes := postgres.NovoRepositorioRecorte(pool, uow)
+	recortes := postgres.NovoRepositorioRecorte(pool, uow,
+		postgres.ComGravacaoEmLote(cfg.GravacaoEmLote))
+
+	// 8b — leitura de tb_importacao. É construída sempre, porque é barata e não
+	// abre recurso algum, mas só é LIGADA às portas que a usam quando a chave
+	// correspondente pede.
+	consultas := postgres.NovoRepositorioConsulta(pool)
 
 	// 9 e 10 — extração e índice.
 	extrator := pdftext.NovoExtrator()
@@ -199,18 +219,30 @@ func Novo(
 
 	// 12 — executor. Teto zero reproduz o legado, onde `tokio::task::spawn`
 	// nunca recusa nem enfileira.
-	executor := worker.NovoPool(logger, cfg.MaxImportacoesConcorrentes)
+	executor := worker.NovoPool(logger, cfg.MaxImportacoesConcorrentes,
+		worker.ComObservador(filaObservada{m: metricas}))
 
 	// 13 — ingestão, o caminho síncrono.
 	ingestao, err := usecase.NovaIngestao(usecase.DependenciasDaIngestao{
-		Importacoes: importacoes,
-		Executor:    executor,
-		Logger:      logger,
-		Processar:   pipeline.Processar,
+		Importacoes:          importacoes,
+		Executor:             executor,
+		Logger:               logger,
+		Processar:            pipeline.Processar,
+		ValidarAssinaturaPDF: cfg.ValidarAssinaturaPDF,
+		// NULO desliga a idempotência, que é o padrão. Passar o repositório
+		// incondicionalmente ligaria a evolução para todo mundo.
+		Equivalentes: seSim(cfg.IdempotenciaPorHash, usecase.ConsultorDeIdempotencia(consultas)),
 	})
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("montando a ingestão: %w", err)
+	}
+
+	// 13b — varredura de órfãs, quando ligada.
+	varredura, err := montarVarredura(cfg, logger, metricas, consultas, importacoes, uow)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("montando a varredura de órfãs: %w", err)
 	}
 
 	// 14 — roteador com a cadeia de middleware.
@@ -220,6 +252,11 @@ func Novo(
 		APIKey:              cfg.APIKey.Revelar(),
 		MaxUploadBytes:      cfg.MaxUploadBytes,
 		RespostaProblemJSON: cfg.RespostaProblemJSON,
+		RateLimitRPS:        cfg.RateLimitRPS,
+		StatusEndpoint:      cfg.StatusEndpoint,
+		HealthEndpoints:     cfg.HealthEndpoints,
+		Importacoes:         seSim(cfg.StatusEndpoint, httpapi.ConsultorDeImportacao(consultas)),
+		Pronto:              seSim(cfg.HealthEndpoints, prontidao(pool, executor, cfg)),
 	})
 	if err != nil {
 		pool.Close()
@@ -242,6 +279,7 @@ func Novo(
 		Servidor:        servidor,
 		Executor:        executor,
 		Pool:            pool,
+		Varredura:       varredura,
 		EncerrarTracing: encerrarTracing,
 		Motivo:          motivo,
 		Versao:          versao,
@@ -286,6 +324,14 @@ func (a *App) Executar(ctx context.Context, forcar <-chan struct{}) error {
 		slog.String("revisao", a.revisao),
 		slog.Any("config", a.cfg),
 	)
+
+	// A varredura começa junto com o servidor e é parada por Encerrar. O
+	// contexto é o SEM cancelamento: quem a interrompe é Parar, não o sinal —
+	// senão o primeiro SIGTERM abortaria uma passagem no meio da transação em
+	// vez de deixá-la terminar.
+	if a.varredura != nil {
+		a.varredura.Iniciar(context.WithoutCancel(ctx))
+	}
 
 	erros := make(chan error, 1)
 	go func() {
@@ -386,6 +432,15 @@ func (a *App) Encerrar(ctx context.Context, motivo string, forcar <-chan struct{
 	}
 
 	var problemas []error
+
+	// 0 — parar a varredura de órfãs, quando existe. Vem ANTES de tudo porque é
+	// a única etapa que ABRE transação por conta própria: deixá-la correndo
+	// enquanto o pool fecha derrubaria uma transação no meio, e as linhas
+	// trancadas por `FOR UPDATE` só seriam liberadas pelo servidor de banco ao
+	// perceber a conexão morta.
+	if a.varredura != nil {
+		problemas = a.etapa(ctx, prazo, "varredura de órfãs", problemas, a.varredura.Parar)
+	}
 
 	// 1 — parar de aceitar; as requisições em curso terminam.
 	problemas = a.etapa(ctx, prazo, "servidor http", problemas, a.servidor.Shutdown)
@@ -525,4 +580,146 @@ func (a metricasDoPipeline) ContarImportacao(desfecho string) {
 		return
 	}
 	a.m.ImportacoesTotal.WithLabelValues(desfecho).Inc()
+}
+
+// -------------------------------------------------------------------------
+// Montagem condicional das evoluções da fase F11
+// -------------------------------------------------------------------------
+
+// seSim devolve o valor quando a chave está ligada, e o ZERO quando não está.
+//
+// Existe porque o padrão de toda evolução é "porta NULA desliga", e escrever o
+// `if` em cada ponto de montagem espalharia a mesma decisão por sete lugares —
+// onde um esquecimento ligaria uma evolução por acidente.
+func seSim[T any](ligada bool, valor T) T {
+	if ligada {
+		return valor
+	}
+	var zero T
+	return zero
+}
+
+// montarVarredura constrói o laço de VARREDURA_ORFAS, ou devolve nulo.
+func montarVarredura(
+	cfg *config.Config,
+	logger *slog.Logger,
+	metricas *observability.Metricas,
+	consultas *postgres.RepositorioConsulta,
+	importacoes domain.RepositorioImportacao,
+	uow domain.UnidadeDeTrabalho,
+) (*periodico.Laco, error) {
+	if !cfg.VarreduraOrfas {
+		return nil, nil //nolint:nilnil // ausência de laço é o caso normal, não erro
+	}
+
+	varredura, err := usecase.NovaVarredura(usecase.DependenciasDaVarredura{
+		Orfas:       consultas,
+		Importacoes: importacoes,
+		UoW:         uow,
+		Relogio:     relogioDoSistema{},
+		Logger:      logger,
+		Metricas:    metricasDaVarredura{m: metricas},
+		Limiar:      cfg.VarreduraOrfasLimiar,
+		Politica:    usecase.PoliticaDeVarredura(cfg.VarreduraOrfasPolitica),
+		Lote:        int32(cfg.VarreduraOrfasLote), //nolint:gosec // a configuração recusa negativo e o valor é operacional
+	})
+	if err != nil {
+		return nil, err //nolint:wrapcheck // o chamador nomeia a etapa
+	}
+
+	return periodico.NovoLaco("varredura-orfas", cfg.VarreduraOrfasIntervalo,
+		func(ctx context.Context) error {
+			// A contagem é descartada aqui: quem a expõe é a métrica, alimentada
+			// dentro de Executar. O laço só precisa saber se houve falha.
+			if _, err := varredura.Executar(ctx); err != nil {
+				return fmt.Errorf("passagem da varredura: %w", err)
+			}
+			return nil
+		}, logger), nil
+}
+
+// prontidao compõe a verificação de /health/ready.
+//
+// Duas condições, ambas do enunciado da fase: BANCO ALCANÇÁVEL e FILA ABAIXO DO
+// TETO. A segunda só tem efeito com MAX_IMPORTACOES_CONCORRENTES ligada — sem
+// teto ninguém espera, e a fila é sempre zero.
+//
+// O prazo é curto de propósito: uma sonda que demora mais que o intervalo de
+// verificação do orquestrador é pior que uma que reprova, porque acumula
+// requisições pendentes.
+func prontidao(pool *pgxpool.Pool, executor *worker.Pool, cfg *config.Config) func(context.Context) error {
+	return func(ctx context.Context) error {
+		ctx, cancelar := context.WithTimeout(ctx, TempoLimiteDaSonda)
+		defer cancelar()
+
+		if pool != nil {
+			if err := pool.Ping(ctx); err != nil {
+				return fmt.Errorf("banco inalcançável: %w", err)
+			}
+		}
+
+		// A fila só é sinal de saturação quando há teto. Com teto zero,
+		// Aguardando é sempre zero e esta condição nunca dispara.
+		if teto := cfg.MaxImportacoesConcorrentes; teto > 0 {
+			if aguardando := executor.Aguardando(); aguardando > 0 {
+				return fmt.Errorf("fila com %d submissão(ões) aguardando vaga (teto %d)",
+					aguardando, teto)
+			}
+		}
+		return nil
+	}
+}
+
+// TempoLimiteDaSonda é o prazo de /health/ready.
+//
+// Dois segundos: um Ping que não volta nesse tempo já é indisponibilidade, e
+// esperar mais só atrasa a decisão do orquestrador.
+const TempoLimiteDaSonda = 2 * time.Second
+
+// filaObservada liga o executor aos instrumentos da fila.
+//
+// Mesma razão de metricasDoPipeline estar aqui: a regra de dependência proíbe
+// internal/platform/worker de conhecer o Prometheus.
+type filaObservada struct{ m *observability.Metricas }
+
+var _ worker.Observador = filaObservada{}
+
+func (f filaObservada) ObservarFila(aguardando, emAndamento int64) {
+	if f.m == nil {
+		return
+	}
+	f.m.FilaProfundidade.Set(float64(aguardando))
+	f.m.ImportacoesEmAndamento.Set(float64(emAndamento))
+}
+
+func (f filaObservada) ObservarEspera(espera time.Duration) {
+	if f.m == nil {
+		return
+	}
+	f.m.FilaEspera.Observe(espera.Seconds())
+}
+
+// metricasDaVarredura liga a varredura aos instrumentos.
+type metricasDaVarredura struct{ m *observability.Metricas }
+
+var _ usecase.MetricasDeVarredura = metricasDaVarredura{}
+
+func (a metricasDaVarredura) ObservarVarredura(_, tratadas int, duracao time.Duration) {
+	if a.m == nil {
+		return
+	}
+	a.m.VarreduraDuracao.Observe(duracao.Seconds())
+	// `encontradas` não vira contador próprio: ela já é a soma de
+	// VarreduraOrfasTotal por status, e um segundo contador do mesmo total só
+	// criaria duas séries que podem divergir.
+	if tratadas > 0 {
+		a.m.VarreduraTratadasTotal.Add(float64(tratadas))
+	}
+}
+
+func (a metricasDaVarredura) ContarOrfa(status string) {
+	if a.m == nil {
+		return
+	}
+	a.m.VarreduraOrfasTotal.WithLabelValues(status).Inc()
 }

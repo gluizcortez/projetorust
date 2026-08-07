@@ -25,9 +25,17 @@ const (
 )
 
 // Rotas do serviço.
+//
+// As três últimas só existem com a chave correspondente ligada.
 const (
 	RotaPing = "/ping"
 	RotaPDF  = "/pdf"
+
+	// RotaImportacao é o prefixo de GET /importacao/{id} (STATUS_ENDPOINT).
+	RotaImportacao = "/importacao"
+	// RotaHealthLive e RotaHealthReady são de HEALTH_ENDPOINTS.
+	RotaHealthLive  = "/health/live"
+	RotaHealthReady = "/health/ready"
 )
 
 // Ingestor é a porta do caso de uso que o manipulador de upload usa.
@@ -53,6 +61,26 @@ type Dependencias struct {
 	// RespostaProblemJSON troca o corpo das respostas por RFC 7807. Nasce
 	// desligada: ligá-la quebra clientes que analisam o texto.
 	RespostaProblemJSON bool
+
+	// RateLimitRPS limita requisições por segundo, por chave de API. Zero
+	// DESLIGA, que é o legado — ele não tem limitação alguma.
+	RateLimitRPS int
+
+	// StatusEndpoint registra GET /importacao/{id}. É ADIÇÃO PURA: nenhuma
+	// rota existente muda. Exige Importacoes.
+	StatusEndpoint bool
+
+	// HealthEndpoints registra /health/live e /health/ready. `/ping` permanece
+	// EXATAMENTE como está — é contrato existente e não verifica nada.
+	HealthEndpoints bool
+
+	// Importacoes é consultado por GET /importacao/{id}. Só é exigido quando
+	// StatusEndpoint está ligado.
+	Importacoes ConsultorDeImportacao
+
+	// Pronto informa se as dependências estão alcançáveis, para /health/ready.
+	// Só é exigido quando HealthEndpoints está ligado.
+	Pronto func(context.Context) error
 }
 
 // NovoRouter monta a cadeia de middleware e as rotas.
@@ -82,6 +110,12 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 	if d.APIKey == "" {
 		return nil, errors.New("httpapi: APIKey é obrigatória")
 	}
+	if d.StatusEndpoint && d.Importacoes == nil {
+		return nil, errors.New("httpapi: STATUS_ENDPOINT ligado exige Importacoes")
+	}
+	if d.HealthEndpoints && d.Pronto == nil {
+		return nil, errors.New("httpapi: HEALTH_ENDPOINTS ligado exige Pronto")
+	}
 
 	escritor := resposta.Escolher(d.RespostaProblemJSON, d.Logger)
 	s := &servico{
@@ -89,6 +123,8 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 		logger:         d.Logger,
 		escritor:       escritor,
 		maxUploadBytes: d.MaxUploadBytes,
+		importacoes:    d.Importacoes,
+		pronto:         d.Pronto,
 	}
 
 	negar := func(w http.ResponseWriter, r *http.Request, codigo int, texto string) {
@@ -101,23 +137,46 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 	//  1. o ServeMux devolveria 405 com corpo próprio e cabeçalho `Allow` —
 	//     nada disso é o que o Salvo emite;
 	//  2. o ServeMux não normaliza barras como o Salvo. Ver normalizarCaminho.
+	autenticado := func(h http.HandlerFunc) http.Handler {
+		return middleware.Encadear(h, middleware.Autenticacao(d.APIKey, negar))
+	}
+
 	manipuladores := map[string]http.Handler{
 		RotaPing: http.HandlerFunc(s.ping),
-		RotaPDF: middleware.Encadear(
-			http.HandlerFunc(s.uploadPDF),
-			middleware.Autenticacao(d.APIKey, negar),
-		),
+		RotaPDF:  autenticado(s.uploadPDF),
+	}
+	metodos := map[string]string{
+		RotaPing: http.MethodGet,
+		RotaPDF:  http.MethodPost,
+	}
+
+	// EVOLUÇÃO — STATUS_ENDPOINT. Adição pura: nenhuma rota existente muda.
+	if d.StatusEndpoint {
+		manipuladores[RotaImportacao] = autenticado(s.consultarImportacao)
+		metodos[RotaImportacao] = http.MethodGet
+	}
+
+	// EVOLUÇÃO — HEALTH_ENDPOINTS. `/ping` NÃO é tocado: continua respondendo
+	// `pong` sem verificar nada, que é o contrato existente.
+	if d.HealthEndpoints {
+		manipuladores[RotaHealthLive] = http.HandlerFunc(s.healthLive)
+		metodos[RotaHealthLive] = http.MethodGet
+		manipuladores[RotaHealthReady] = http.HandlerFunc(s.healthReady)
+		metodos[RotaHealthReady] = http.MethodGet
 	}
 
 	roteador := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rota := normalizarCaminho(r.URL.Path)
+		if d.StatusEndpoint {
+			rota = colapsarImportacao(rota)
+		}
 
 		manipulador, existe := manipuladores[rota]
 		if !existe {
 			EscreverCatcher(w, r, http.StatusNotFound)
 			return
 		}
-		if r.Method != metodosPorRota[rota] {
+		if r.Method != metodos[rota] {
 			// MEDIDO: o método perde ANTES da autenticação. `GET /pdf` sem
 			// chave devolve 405, não 401.
 			EscreverCatcher(w, r, http.StatusMethodNotAllowed)
@@ -126,18 +185,31 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 		manipulador.ServeHTTP(w, r)
 	})
 
-	return middleware.Encadear(roteador,
+	camadas := []middleware.Middleware{
 		middleware.IDRequisicao(),
 		middleware.Registro(d.Logger),
 		middleware.Recuperacao(d.Logger),
 		middleware.LimiteDeCorpo(d.MaxUploadBytes),
-	), nil
+	}
+	// EVOLUÇÃO — RATE_LIMIT_RPS. Fica DEPOIS da recuperação, para que um
+	// pânico no limitador não derrube o processo, e ANTES do roteamento, para
+	// que a recusa não gaste trabalho algum.
+	if d.RateLimitRPS > 0 {
+		camadas = append(camadas, middleware.LimitarTaxa(d.RateLimitRPS, negar))
+	}
+
+	return middleware.Encadear(roteador, camadas...), nil
 }
 
-// metodosPorRota é o que cada rota aceita (reference/main.rs:52-56).
-var metodosPorRota = map[string]string{
-	RotaPing: http.MethodGet,
-	RotaPDF:  http.MethodPost,
+// colapsarImportacao reduz `/importacao/42` a `/importacao`, para que o
+// roteamento por mapa alcance a rota com identificador no caminho.
+//
+// O identificador em si é lido do caminho pelo manipulador.
+func colapsarImportacao(rota string) string {
+	if rota == RotaImportacao || strings.HasPrefix(rota, RotaImportacao+"/") {
+		return RotaImportacao
+	}
+	return rota
 }
 
 // normalizarCaminho reproduz como o roteador do Salvo compara caminhos.
@@ -173,6 +245,12 @@ type servico struct {
 	logger         *slog.Logger
 	escritor       resposta.Escritor
 	maxUploadBytes int64
+
+	// As duas abaixo só são preenchidas com STATUS_ENDPOINT e HEALTH_ENDPOINTS
+	// ligadas, respectivamente. Nulas, os manipuladores que as usam sequer estão
+	// registrados — NovoRouter recusa a montagem incoerente.
+	importacoes ConsultorDeImportacao
+	pronto      func(context.Context) error
 }
 
 // ping reproduz reference/main.rs:112-115. Sem autenticação, sem consultar o
@@ -189,6 +267,24 @@ func (s *servico) ping(w http.ResponseWriter, r *http.Request) {
 func (s *servico) uploadPDF(w http.ResponseWriter, r *http.Request) {
 	lida, err := lerSubmissao(r, s.maxUploadBytes)
 	if err != nil {
+		// EVOLUÇÃO — MAX_UPLOAD_BYTES. Corpo acima do teto é o único caso de
+		// falha de leitura com resposta PRÓPRIA: 400 com a crítica nova, que é a
+		// opção B de docs/DECISOES-ABERTAS.md, D-16. Com a chave no padrão (zero)
+		// este ramo é INALCANÇÁVEL — não há limite a estourar.
+		//
+		// A crítica vai SOZINHA, e não ao final das cinco do legado, porque a
+		// leitura aborta antes de os campos de texto chegarem: não há como saber
+		// se a data do caderno também faltava.
+		if errors.Is(err, ErrCorpoAcimaDoLimite) {
+			s.logger.WarnContext(r.Context(), "corpo acima do limite configurado",
+				slog.Int64("max_upload_bytes", s.maxUploadBytes), slog.Any("erro", err))
+			var criticas domain.Criticas
+			criticas.Adicionar(domain.CriticaPDFAcimaDoLimite)
+			s.escritor.Escrever(w, r, http.StatusBadRequest,
+				criticas.Mensagem(), criticas.Itens())
+			return
+		}
+
 		// O legado faz `unwrap()` na leitura do arquivo (reference/main.rs:233)
 		// e ENTRA EM PÂNICO — o cliente recebe a conexão fechada. Responder 422
 		// com o texto do contrato é a correção do achado A05: mesmo texto que a

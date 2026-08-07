@@ -25,6 +25,44 @@ const (
 	IndexMemoriaBytesPadrao = int64(500_000_000)
 )
 
+// Padrões da varredura de órfãs (VARREDURA_ORFAS). Não têm equivalente no
+// legado — ele não varre nada.
+const (
+	// VarreduraIntervaloPadrao é de quanto em quanto tempo a varredura roda.
+	//
+	// Quinze minutos é bem mais lento que o tempo de processamento de um
+	// diário, então uma importação normal nunca é vista duas vezes pela
+	// varredura, e é frequente o bastante para uma presa não passar um turno
+	// inteiro despercebida.
+	VarreduraIntervaloPadrao = 15 * time.Minute
+
+	// VarreduraLimiarPadrao é a idade mínima de data_inicio para uma importação
+	// ser considerada presa.
+	//
+	// Uma hora é MUITO acima do pior caso conhecido de processamento e é
+	// deliberadamente conservador: o custo de marcar como erro uma importação
+	// que estava apenas lenta é alto — o documento não existe mais e não há como
+	// refazê-la —, enquanto o custo de demorar mais uma hora para detectar uma
+	// presa é nenhum, porque ela está parada desde sempre. O valor definitivo
+	// depende de D-04, que mede o tempo real de processamento em produção.
+	VarreduraLimiarPadrao = time.Hour
+
+	// VarreduraPoliticaPadrao apenas observa: registra e conta, sem alterar
+	// estado. Ver usecase.PoliticaObservar.
+	VarreduraPoliticaPadrao = "observar"
+
+	// VarreduraLotePadrao é quantas linhas uma passagem tranca.
+	VarreduraLotePadrao = 100
+)
+
+// PoliticasDeVarreduraAceitas são os valores de VARREDURA_ORFAS_POLITICA.
+//
+// A lista é DUPLICADA de usecase.PoliticasDeVarredura de propósito: fazer
+// internal/config depender de internal/usecase inverteria a direção das
+// dependências por causa de duas cadeias de texto. A duplicação é guardada por
+// TestPoliticasAcompanhamOCasoDeUso, que falha se as duas listas divergirem.
+var PoliticasDeVarreduraAceitas = []string{"observar", "erro"}
+
 // Config é toda a configuração do serviço.
 //
 // Não há variável global: a instância é criada em main e injetada. Ver a
@@ -74,6 +112,16 @@ type Config struct {
 	RateLimitRPS               int
 	StatusEndpoint             bool
 	HealthEndpoints            bool
+
+	// --- ajustes da varredura de órfãs ---
+	//
+	// Só têm efeito com VARREDURA_ORFAS ligada. Os padrões são conservadores de
+	// propósito: a política PADRÃO apenas OBSERVA, sem alterar estado algum, para
+	// que ligar a chave meça o problema antes de agir sobre ele.
+	VarreduraOrfasIntervalo time.Duration
+	VarreduraOrfasLimiar    time.Duration
+	VarreduraOrfasPolitica  string
+	VarreduraOrfasLote      int
 }
 
 // Endereco é o ponto de escuta, no formato host:porta.
@@ -109,6 +157,10 @@ func (c Config) LogValue() slog.Value {
 			slog.Int("rate_limit_rps", c.RateLimitRPS),
 			slog.Bool("status_endpoint", c.StatusEndpoint),
 			slog.Bool("health_endpoints", c.HealthEndpoints),
+			slog.Duration("varredura_orfas_intervalo", c.VarreduraOrfasIntervalo),
+			slog.Duration("varredura_orfas_limiar", c.VarreduraOrfasLimiar),
+			slog.String("varredura_orfas_politica", c.VarreduraOrfasPolitica),
+			slog.Int("varredura_orfas_lote", c.VarreduraOrfasLote),
 		),
 	)
 }
@@ -140,6 +192,10 @@ func (c Config) String() string {
 	fmt.Fprintf(&b, ", rate_limit_rps=%d", c.RateLimitRPS)
 	fmt.Fprintf(&b, ", status_endpoint=%t", c.StatusEndpoint)
 	fmt.Fprintf(&b, ", health_endpoints=%t", c.HealthEndpoints)
+	fmt.Fprintf(&b, ", varredura_orfas_intervalo=%s", c.VarreduraOrfasIntervalo)
+	fmt.Fprintf(&b, ", varredura_orfas_limiar=%s", c.VarreduraOrfasLimiar)
+	fmt.Fprintf(&b, ", varredura_orfas_politica=%s", c.VarreduraOrfasPolitica)
+	fmt.Fprintf(&b, ", varredura_orfas_lote=%d", c.VarreduraOrfasLote)
 	b.WriteString("}")
 	return b.String()
 }
@@ -219,6 +275,26 @@ func Carregar(ctx context.Context) (*Config, error) {
 	cfg.RateLimitRPS = l.inteiro("RATE_LIMIT_RPS", 0)
 	cfg.StatusEndpoint = l.booleano("STATUS_ENDPOINT", false)
 	cfg.HealthEndpoints = l.booleano("HEALTH_ENDPOINTS", false)
+
+	// Ajustes da varredura. Lidos SEMPRE, para que um valor inválido seja
+	// recusado no arranque em vez de na primeira vez que alguém ligar a chave.
+	cfg.VarreduraOrfasIntervalo = l.duracao("VARREDURA_ORFAS_INTERVALO", VarreduraIntervaloPadrao)
+	cfg.VarreduraOrfasLimiar = l.duracao("VARREDURA_ORFAS_LIMIAR", VarreduraLimiarPadrao)
+	cfg.VarreduraOrfasPolitica = l.enumerado("VARREDURA_ORFAS_POLITICA",
+		VarreduraPoliticaPadrao, PoliticasDeVarreduraAceitas...)
+	cfg.VarreduraOrfasLote = l.inteiro("VARREDURA_ORFAS_LOTE", VarreduraLotePadrao)
+
+	// Zero é aceito nas demais durações porque significa "sem limite". Aqui não:
+	// um intervalo de zero faria o laço girar sem pausa, e um limiar de zero
+	// consideraria presa toda importação em curso.
+	if cfg.VarreduraOrfas {
+		if cfg.VarreduraOrfasIntervalo <= 0 {
+			l.anotar("VARREDURA_ORFAS_INTERVALO precisa ser positivo com VARREDURA_ORFAS ligada")
+		}
+		if cfg.VarreduraOrfasLimiar <= 0 {
+			l.anotar("VARREDURA_ORFAS_LIMIAR precisa ser positivo com VARREDURA_ORFAS ligada")
+		}
+	}
 
 	if len(l.problemas) > 0 {
 		return nil, &ErroDeConfiguracao{Problemas: l.problemas}

@@ -1,0 +1,11 @@
+-- Reversao do indice de idempotencia — fase F11
+--
+-- DROP INDEX CONCURRENTLY tambem NAO pode rodar dentro de uma transacao, pela
+-- mesma razao da criacao.
+--
+-- Reverter e seguro a qualquer momento: o indice nao sustenta restricao alguma
+-- e nenhuma consulta do legado depende dele. Sem ele, a consulta de
+-- idempotencia passa a varrer a tabela — motivo pelo qual a chave
+-- IDEMPOTENCIA_POR_HASH so deve ser ligada DEPOIS de o indice existir e estar
+-- valido.
+DROP INDEX CONCURRENTLY IF EXISTS recorte.ix_importacao_idempotencia;

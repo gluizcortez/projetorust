@@ -43,7 +43,28 @@ type Metricas struct {
 	ImportacoesEmAndamento prometheus.Gauge
 	// FilaProfundidade acompanha as importações aguardando vaga quando
 	// MAX_IMPORTACOES_CONCORRENTES está ligado (fase F11).
+	//
+	// Vale SEMPRE zero com a chave no padrão: sem teto ninguém espera. Uma série
+	// que sobe é a evidência direta de que o teto está apertado demais.
 	FilaProfundidade prometheus.Gauge
+	// FilaEspera distribui quanto tempo uma submissão esperou por vaga.
+	//
+	// Só recebe amostra quando houve espera de fato — o caminho sem teto não a
+	// alimenta, nem com zero, para que a série não sugira fila onde não há.
+	//
+	// É a métrica que decide o valor de MAX_IMPORTACOES_CONCORRENTES: profundidade
+	// alta com espera baixa é fila saudável; espera na casa dos segundos
+	// significa que o cliente está pagando o teto na latência da resposta.
+	FilaEspera prometheus.Histogram
+
+	// VarreduraOrfasTotal conta importações presas encontradas, por status de
+	// origem (VARREDURA_ORFAS).
+	VarreduraOrfasTotal *prometheus.CounterVec
+	// VarreduraTratadasTotal conta as que tiveram o status alterado. Fica em
+	// zero com a política "observar".
+	VarreduraTratadasTotal prometheus.Counter
+	// VarreduraDuracao mede a duração de cada passagem da varredura.
+	VarreduraDuracao prometheus.Histogram
 	// DocumentosSemPaginas conta documentos que produziram zero páginas.
 	//
 	// Existe por causa de INV-P20: um PDF truncado é aceito pelo MuPDF, produz
@@ -93,6 +114,30 @@ func NovasMetricas() *Metricas {
 			Help: "Importações aguardando vaga para processamento.",
 		}),
 
+		FilaEspera: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: prefixo + "fila_espera_segundos",
+			Help: "Tempo que uma submissão esperou por vaga de processamento.",
+			// De 1 ms a ~16 s. Acima disso o cliente já sentiu na resposta, e o
+			// que importa não é o valor exato: é que estourou.
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 15),
+		}),
+
+		VarreduraOrfasTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: prefixo + "varredura_orfas_total",
+			Help: "Importações presas encontradas pela varredura, por status de origem.",
+		}, []string{"status"}),
+
+		VarreduraTratadasTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: prefixo + "varredura_tratadas_total",
+			Help: "Importações presas cujo status a varredura alterou.",
+		}),
+
+		VarreduraDuracao: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    prefixo + "varredura_duracao_segundos",
+			Help:    "Duração de cada passagem da varredura de órfãs.",
+			Buckets: prometheus.ExponentialBuckets(0.01, 3, 9),
+		}),
+
 		DocumentosSemPaginas: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: prefixo + "documentos_sem_paginas_total",
 			Help: "Documentos aceitos que produziram zero páginas (ver INV-P20).",
@@ -106,6 +151,10 @@ func NovasMetricas() *Metricas {
 		m.RecortesPorImportacao,
 		m.ImportacoesEmAndamento,
 		m.FilaProfundidade,
+		m.FilaEspera,
+		m.VarreduraOrfasTotal,
+		m.VarreduraTratadasTotal,
+		m.VarreduraDuracao,
 		m.DocumentosSemPaginas,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -115,7 +164,4 @@ func NovasMetricas() *Metricas {
 }
 
 // Registro devolve o registro para exposição por HTTP.
-//
-// A rota /metrics é da fase F11, atrás da chave HEALTH_ENDPOINTS; aqui só
-// entregamos o coletor.
 func (m *Metricas) Registro() *prometheus.Registry { return m.registro }

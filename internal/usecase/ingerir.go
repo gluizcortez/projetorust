@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,6 +26,34 @@ type Ingestao struct {
 	// *Pipeline, para que a ingestão não dependa do pipeline concreto — o que
 	// mantém os dois testáveis isolados.
 	processar func(ctx context.Context, id int64, conteudo []byte)
+
+	// --- evoluções da fase F11, todas desligadas por padrão ---
+
+	// validarAssinatura recusa arquivo que não comece com `%PDF-`.
+	validarAssinatura bool
+
+	// equivalentes é consultado quando a idempotência por hash está ligada.
+	// NULO desliga a evolução — e é o padrão, então nenhuma consulta a mais é
+	// emitida em relação ao legado.
+	equivalentes ConsultorDeIdempotencia
+}
+
+// ConsultorDeIdempotencia procura uma importação já registrada para o mesmo
+// documento — EVOLUÇÃO da fase F11, atrás de IDEMPOTENCIA_POR_HASH.
+//
+// Porta definida pelo consumidor, como todas as outras.
+type ConsultorDeIdempotencia interface {
+	// ImportacaoEquivalente devolve a importação de mesmo hash, mesmo caderno e
+	// mesma data de caderno.
+	//
+	// Nenhuma correspondência devolve domain.ErrImportacaoNaoEncontrada — não um
+	// resumo zerado, que seria indistinguível de uma importação de id 0.
+	//
+	// Havendo mais de uma — o legado permite, porque nunca deduplicou —, a
+	// implementação devolve a MAIS RECENTE. Ver postgres.RepositorioConsulta.
+	ImportacaoEquivalente(
+		ctx context.Context, chave domain.ChaveDeIdempotencia,
+	) (domain.ResumoDaImportacao, error)
 }
 
 // DependenciasDaIngestao reúne o que a ingestão precisa.
@@ -33,6 +62,12 @@ type DependenciasDaIngestao struct {
 	Executor    Executor
 	Logger      *slog.Logger
 	Processar   func(ctx context.Context, id int64, conteudo []byte)
+
+	// ValidarAssinaturaPDF liga a checagem do prefixo `%PDF-`. Padrão false.
+	ValidarAssinaturaPDF bool
+
+	// Equivalentes liga a idempotência por hash quando NÃO nula. Padrão nulo.
+	Equivalentes ConsultorDeIdempotencia
 }
 
 // NovaIngestao valida as dependências e monta o caso de uso.
@@ -55,10 +90,12 @@ func NovaIngestao(d DependenciasDaIngestao) (*Ingestao, error) {
 	}
 
 	return &Ingestao{
-		importacoes: d.Importacoes,
-		executor:    d.Executor,
-		logger:      d.Logger,
-		processar:   d.Processar,
+		importacoes:       d.Importacoes,
+		executor:          d.Executor,
+		logger:            d.Logger,
+		processar:         d.Processar,
+		validarAssinatura: d.ValidarAssinaturaPDF,
+		equivalentes:      d.Equivalentes,
 	}, nil
 }
 
@@ -96,9 +133,33 @@ func (i *Ingestao) Executar(ctx context.Context, cmd ComandoIngerir) (int64, err
 		return 0, domain.NovoErroDeValidacao(criticas)
 	}
 
+	// EVOLUÇÃO — VALIDAR_ASSINATURA_PDF.
+	//
+	// Fica DEPOIS da validação de propósito. Uma submissão que erra a data E
+	// manda um arquivo que não é PDF continua recebendo as críticas na ordem
+	// contratual, em vez de trocá-las por um 422 menos informativo — o efeito da
+	// chave se limita ao que o legado ACEITARIA.
+	//
+	// Ainda é "antes de qualquer processamento" no sentido que importa: nada é
+	// gravado, nada é agendado, nenhuma importação é gasta.
+	//
+	// A resposta é a MESMA 422 do legado, sem texto novo: ErrPDFInvalido cai no
+	// ramo genérico de uploadPDF, que responde "Erro ao processar o PDF".
+	if i.validarAssinatura && !domain.PareceComPDF(cmd.Conteudo) {
+		i.logger.WarnContext(ctx, "arquivo sem assinatura de PDF recusado",
+			slog.Int("bytes", len(cmd.Conteudo)))
+		return 0, fmt.Errorf("assinatura ausente: %w", domain.ErrPDFInvalido)
+	}
+
 	// 3 — main.rs:233-235. O resumo é do conteúdo, não do nome.
 	soma := sha256.Sum256(cmd.Conteudo)
 	importacao.HashSHA256 = hex.EncodeToString(soma[:])
+
+	// EVOLUÇÃO — IDEMPOTENCIA_POR_HASH. Precisa vir depois do resumo, que é a
+	// própria chave de busca, e antes do Registrar, que é o que ela evita.
+	if id, reaproveitou := i.reaproveitar(ctx, importacao); reaproveitou {
+		return id, nil
+	}
 
 	// 4 — main.rs:237-245.
 	id, err := i.importacoes.Registrar(ctx, importacao)
@@ -141,4 +202,53 @@ func (i *Ingestao) Executar(ctx context.Context, cmd ComandoIngerir) (int64, err
 
 	log.InfoContext(ctx, "importação aceita", slog.Int("bytes", len(cmd.Conteudo)))
 	return id, nil
+}
+
+// reaproveitar procura uma importação FINALIZADA do mesmo documento.
+//
+// EVOLUÇÃO da fase F11 — IDEMPOTENCIA_POR_HASH. Devolve `false` quando a chave
+// está desligada, quando não há equivalente, ou quando o equivalente ainda não
+// terminou.
+//
+// # Por que só a FINALIZADA conta
+//
+// Uma importação em status 0 a 3 está em curso: devolver o id dela faria o
+// cliente crer que o reenvio foi aceito, quando na verdade ele só herdou o
+// destino de uma tarefa que pode falhar. Uma em -1 terminou em ERRO, e reenviar
+// depois de um erro é exatamente o que o operador precisa poder fazer. Só o 5 é
+// resultado utilizável.
+//
+// # Falha de consulta NÃO derruba a submissão
+//
+// A idempotência é otimização, não regra de negócio: banco indisponível para o
+// SELECT vira registro e segue o caminho normal, que é o do legado. Falhar aqui
+// tornaria o serviço MENOS disponível com a chave ligada — o oposto do que ela
+// existe para fazer.
+func (i *Ingestao) reaproveitar(ctx context.Context, imp domain.Importacao) (int64, bool) {
+	if i.equivalentes == nil {
+		return 0, false
+	}
+
+	chave := domain.DeImportacao(imp)
+	existente, err := i.equivalentes.ImportacaoEquivalente(ctx, chave)
+	switch {
+	case errors.Is(err, domain.ErrImportacaoNaoEncontrada):
+		return 0, false
+	case err != nil:
+		i.logger.ErrorContext(ctx, "falha ao consultar idempotência; seguindo sem ela",
+			slog.Any("erro", err))
+		return 0, false
+	}
+
+	if existente.Status != domain.StatusFinalizado {
+		i.logger.InfoContext(ctx, "documento equivalente ainda em curso; registrando mesmo assim",
+			slog.Int64("id_importacao_equivalente", existente.ID),
+			slog.String("status", existente.Status.String()))
+		return 0, false
+	}
+
+	i.logger.InfoContext(ctx, "reenvio reaproveitou importação finalizada",
+		slog.Int64("id_importacao", existente.ID),
+		slog.Int("bytes", len(imp.HashSHA256)/2))
+	return existente.ID, true
 }

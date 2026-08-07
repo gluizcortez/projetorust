@@ -59,8 +59,14 @@ pg-descer:
 ## test-integration: testes que exigem PostgreSQL real
 ##   Usa TEST_DATABASE_URL. Sem a variável, os testes são pulados com
 ##   mensagem explicativa em vez de falharem.
+# -p 1 serializa os PACOTES. Sem isso, `internal/adapter/postgres` — que faz
+# `DROP SCHEMA recorte CASCADE` a cada teste — roda em paralelo com
+# `internal/app` e `test/e2e`, que consultam as mesmas tabelas no MESMO banco.
+# A janela é curta e a falha, intermitente: o sintoma é um 500 onde o teste
+# espera 404. Um banco por pacote seria a alternativa; serializar custa alguns
+# segundos e não exige infraestrutura nova.
 test-integration: pg-subir
-	go test ./... -race -tags=integration -run 'Integration|Integracao|CicloDeVida' -v
+	go test ./... -race -tags=integration -p 1 -run 'Integration|Integracao|CicloDeVida' -v
 
 ## sonda-http: mede o contrato HTTP do legado reconstruindo o roteador do Salvo
 ##   Resolveu D-07, D-08 e D-10. Reexecutar quando a versão do Salvo de

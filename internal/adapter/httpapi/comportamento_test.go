@@ -691,6 +691,14 @@ func TestLimiteDeCorpoDesligadoPorPadrao(t *testing.T) {
 }
 
 // TestLimiteDeCorpoLigadoRecusa cobre a EVOLUÇÃO atrás de MAX_UPLOAD_BYTES.
+//
+// A resposta é a opção B de docs/DECISOES-ABERTAS.md, D-16: 400 com a crítica
+// nova, e NÃO o 422 genérico. A fase F9 tinha deixado o 422 como provisório,
+// antes de a decisão ser tomada.
+//
+// A crítica vem SOZINHA porque a leitura aborta no meio do corpo: os campos de
+// texto deste corpo são todos válidos, mas ainda que não fossem, não haveria
+// como sabê-lo.
 func TestLimiteDeCorpoLigadoRecusa(t *testing.T) {
 	grande := strings.Repeat("A", 64<<10)
 	corpo := corpoMultipart(
@@ -708,8 +716,11 @@ func TestLimiteDeCorpoLigadoRecusa(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.roteador.ServeHTTP(w, requisicaoPDF(corpo, texto(chaveDeTeste)))
 
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Errorf("status = %d; esperava 422 com o limite ligado", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d; esperava 400 com o limite ligado (D-16, opção B)", w.Code)
+	}
+	if corpo := w.Body.String(); corpo != domain.CriticaPDFAcimaDoLimite {
+		t.Errorf("corpo = %q; esperava %q", corpo, domain.CriticaPDFAcimaDoLimite)
 	}
 	if len(p.importacoes.Registradas) != 0 {
 		t.Error("nada deveria ter sido registrado")

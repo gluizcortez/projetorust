@@ -1,0 +1,34 @@
+-- Indice de idempotencia por hash — fase F11, chave IDEMPOTENCIA_POR_HASH
+--
+-- Sustenta queries/f11/importacao_equivalente.sql, que filtra por
+-- (hash, id_cadernos, data_caderno) e ordena por id_importacao DESC.
+--
+-- ATENCAO — ESTE ARQUIVO NAO PODE RODAR DENTRO DE UMA TRANSACAO.
+--
+-- `CREATE INDEX CONCURRENTLY` e recusado pelo PostgreSQL dentro de um bloco de
+-- transacao. Quem aplica precisa executa-lo em autocommit. E o preco de nao
+-- travar escritas em tb_importacao: a variante sem CONCURRENTLY tomaria um
+-- SHARE lock que bloqueia todo INSERT na tabela pelo tempo da construcao, o que
+-- em uma tabela de producao significa recusar submissoes.
+--
+-- NAO E UNIQUE. Um banco de producao ja tem duplicatas: o legado nunca
+-- deduplicou, entao o mesmo diario reenviado gerou varias linhas. Um indice
+-- unico FALHARIA na criacao, e mesmo que passasse passaria a recusar reenvios
+-- que hoje sao aceitos — mudanca de comportamento com a chave DESLIGADA, que e
+-- exatamente o que a fase proibe.
+--
+-- IF NOT EXISTS torna a aplicacao repetivel. Vale lembrar que um
+-- CREATE INDEX CONCURRENTLY interrompido deixa um indice INVALIDO para tras,
+-- que o IF NOT EXISTS considera existente; ver a nota de verificacao abaixo.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_importacao_idempotencia
+    ON recorte.tb_importacao (hash, id_cadernos, data_caderno, id_importacao DESC);
+
+-- Verificacao: um indice deixado INVALIDO por uma criacao interrompida nao
+-- serve para nada e nao e usado pelo planejador. A consulta abaixo devolve
+-- linha quando isso aconteceu; o operador deve entao executar o .down.sql e
+-- aplicar de novo.
+--
+--   SELECT c.relname
+--   FROM pg_index i
+--   JOIN pg_class c ON c.oid = i.indexrelid
+--   WHERE NOT i.indisvalid AND c.relname = 'ix_importacao_idempotencia';

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gluizcortez/projetorust/internal/config"
+	"github.com/gluizcortez/projetorust/internal/usecase"
 )
 
 // variaveis são todas as que Carregar consulta. O ambiente de teste começa sem
@@ -23,6 +24,8 @@ var variaveis = []string{
 	"GRAVACAO_EM_LOTE", "VALIDAR_ASSINATURA_PDF", "VARREDURA_ORFAS",
 	"RESPOSTA_PROBLEM_JSON", "RATE_LIMIT_RPS", "STATUS_ENDPOINT",
 	"HEALTH_ENDPOINTS", "LOG_NIVEL", "LOG_FORMATO", "OTEL_EXPORTER_OTLP_ENDPOINT",
+	"VARREDURA_ORFAS_INTERVALO", "VARREDURA_ORFAS_LIMIAR",
+	"VARREDURA_ORFAS_POLITICA", "VARREDURA_ORFAS_LOTE",
 	"HTTP_TEMPO_LIMITE_CABECALHO", "HTTP_TEMPO_LIMITE_LEITURA",
 	"HTTP_TEMPO_LIMITE_ESCRITA", "HTTP_TEMPO_LIMITE_OCIOSO", "HTTP_MAX_HEADER_BYTES",
 }
@@ -94,6 +97,10 @@ func TestPadroesReproduzemOLegado(t *testing.T) {
 		{"RateLimitRPS", cfg.RateLimitRPS, 0},
 		{"StatusEndpoint", cfg.StatusEndpoint, false},
 		{"HealthEndpoints", cfg.HealthEndpoints, false},
+		{"VarreduraOrfasIntervalo", cfg.VarreduraOrfasIntervalo, 15 * time.Minute},
+		{"VarreduraOrfasLimiar", cfg.VarreduraOrfasLimiar, time.Hour},
+		{"VarreduraOrfasPolitica", cfg.VarreduraOrfasPolitica, "observar"},
+		{"VarreduraOrfasLote", cfg.VarreduraOrfasLote, 100},
 		{"LogNivel", cfg.LogNivel, slog.LevelInfo},
 		{"LogFormato", cfg.LogFormato, "json"},
 		{"OTLPEndpoint", cfg.OTLPEndpoint, ""},
@@ -508,5 +515,132 @@ func TestTemposLimiteHTTPConfiguraveis(t *testing.T) {
 	// Inteiro simples é interpretado como segundos.
 	if cfg.HTTPTempoLimiteDeEscrita != 90*time.Second {
 		t.Errorf("escrita = %v; esperava 90s", cfg.HTTPTempoLimiteDeEscrita)
+	}
+}
+
+// -------------------------------------------------------------------------
+// Fase F11 — ajustes da varredura de órfãs
+// -------------------------------------------------------------------------
+
+// TestPoliticasAcompanhamOCasoDeUso guarda a duplicação deliberada.
+//
+// A lista de políticas vive em dois lugares: aqui, para a validação da
+// configuração, e em internal/usecase, que é quem as implementa. Fazer
+// internal/config depender de internal/usecase inverteria a direção das
+// dependências por causa de duas cadeias de texto — mas duas listas soltas
+// divergem em silêncio, e este teste é o que impede isso.
+func TestPoliticasAcompanhamOCasoDeUso(t *testing.T) {
+	doCasoDeUso := make([]string, 0, len(usecase.PoliticasDeVarredura))
+	for _, p := range usecase.PoliticasDeVarredura {
+		doCasoDeUso = append(doCasoDeUso, string(p))
+	}
+
+	if len(doCasoDeUso) != len(config.PoliticasDeVarreduraAceitas) {
+		t.Fatalf("config aceita %v; o caso de uso implementa %v",
+			config.PoliticasDeVarreduraAceitas, doCasoDeUso)
+	}
+	for i, esperada := range doCasoDeUso {
+		if config.PoliticasDeVarreduraAceitas[i] != esperada {
+			t.Errorf("posição %d: config diz %q, o caso de uso diz %q",
+				i, config.PoliticasDeVarreduraAceitas[i], esperada)
+		}
+	}
+
+	// E o padrão da configuração precisa ser uma delas.
+	if !usecase.PoliticaValida(config.VarreduraPoliticaPadrao) {
+		t.Errorf("o padrão %q não é uma política implementada", config.VarreduraPoliticaPadrao)
+	}
+}
+
+// TestPoliticaDesconhecidaEhRecusada.
+func TestPoliticaDesconhecidaEhRecusada(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+	// `reprocessar` é a tentação óbvia — e é justamente a que não existe,
+	// porque o documento não é arquivado. Ver docs/DECISOES-ABERTAS.md, D-21.
+	t.Setenv("VARREDURA_ORFAS_POLITICA", "reprocessar")
+
+	_, err := carregar(t)
+	if err == nil {
+		t.Fatal("carregar aceitou uma política desconhecida")
+	}
+	if !strings.Contains(err.Error(), "VARREDURA_ORFAS_POLITICA") {
+		t.Errorf("erro = %v; deveria nomear a variável", err)
+	}
+}
+
+// TestVarreduraLigadaExigeIntervaloELimiarPositivos.
+//
+// Zero é aceito nas demais durações porque significa "sem limite". Aqui não: um
+// intervalo de zero faria o laço girar sem pausa, e um limiar de zero
+// consideraria presa TODA importação em curso — que é o pior desfecho possível,
+// já que a política de erro é irreversível.
+func TestVarreduraLigadaExigeIntervaloELimiarPositivos(t *testing.T) {
+	casos := []struct {
+		nome     string
+		variavel string
+	}{
+		{"intervalo zero", "VARREDURA_ORFAS_INTERVALO"},
+		{"limiar zero", "VARREDURA_ORFAS_LIMIAR"},
+	}
+
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			ambienteLimpo(t)
+			comSegredosValidos(t)
+			t.Setenv("VARREDURA_ORFAS", "true")
+			t.Setenv(caso.variavel, "0")
+
+			_, err := carregar(t)
+			if err == nil {
+				t.Fatalf("carregar aceitou %s=0 com a varredura ligada", caso.variavel)
+			}
+			if !strings.Contains(err.Error(), caso.variavel) {
+				t.Errorf("erro = %v; deveria nomear %s", err, caso.variavel)
+			}
+		})
+	}
+}
+
+// TestVarreduraDesligadaNaoValidaOsAjustes.
+//
+// Com a chave no padrão, os ajustes não têm efeito algum — e recusar o arranque
+// por causa deles seria transformar uma chave desligada em quebra de serviço.
+func TestVarreduraDesligadaNaoValidaOsAjustes(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+	t.Setenv("VARREDURA_ORFAS_INTERVALO", "0")
+	t.Setenv("VARREDURA_ORFAS_LIMIAR", "0")
+
+	if _, err := carregar(t); err != nil {
+		t.Errorf("carregar recusou ajustes irrelevantes com a varredura desligada: %v", err)
+	}
+}
+
+// TestAjustesDaVarreduraLigam.
+func TestAjustesDaVarreduraLigam(t *testing.T) {
+	ambienteLimpo(t)
+	comSegredosValidos(t)
+	t.Setenv("VARREDURA_ORFAS", "true")
+	t.Setenv("VARREDURA_ORFAS_INTERVALO", "5m")
+	t.Setenv("VARREDURA_ORFAS_LIMIAR", "2h")
+	t.Setenv("VARREDURA_ORFAS_POLITICA", "erro")
+	t.Setenv("VARREDURA_ORFAS_LOTE", "25")
+
+	cfg, err := carregar(t)
+	if err != nil {
+		t.Fatalf("carregar: %v", err)
+	}
+	if cfg.VarreduraOrfasIntervalo != 5*time.Minute {
+		t.Errorf("intervalo = %s", cfg.VarreduraOrfasIntervalo)
+	}
+	if cfg.VarreduraOrfasLimiar != 2*time.Hour {
+		t.Errorf("limiar = %s", cfg.VarreduraOrfasLimiar)
+	}
+	if cfg.VarreduraOrfasPolitica != "erro" {
+		t.Errorf("política = %q", cfg.VarreduraOrfasPolitica)
+	}
+	if cfg.VarreduraOrfasLote != 25 {
+		t.Errorf("lote = %d", cfg.VarreduraOrfasLote)
 	}
 }

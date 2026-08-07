@@ -74,3 +74,46 @@ func (c *Criticas) Erro() error {
 	}
 	return ErrValidacao
 }
+
+// -------------------------------------------------------------------------
+// Críticas de EVOLUÇÃO — fase F11
+// -------------------------------------------------------------------------
+//
+// Os textos abaixo NÃO existem no legado. Só aparecem com a chave
+// correspondente ligada, e por isso não violam a paridade: com todas as chaves
+// no padrão, nenhuma resposta muda.
+//
+// A posição é sempre AO FINAL da lista, depois das cinco críticas do legado.
+// Inseri-las no meio deslocaria as existentes e mudaria a mensagem de uma
+// requisição que hoje falha por outro motivo.
+
+// CriticaPDFAcimaDoLimite acompanha MAX_UPLOAD_BYTES.
+//
+// É a opção B de docs/DECISOES-ABERTAS.md, D-16: reaproveita o formato de
+// crítica que os clientes já sabem interpretar, em vez de introduzir um 413 ou
+// reaproveitar o texto genérico do 422.
+//
+// É a ÚNICA crítica nova da fase. VALIDAR_ASSINATURA_PDF, a outra evolução que
+// rejeita arquivo, responde com o 422 e o texto que o legado JÁ emite — a
+// especificação da fase exige "a MESMA 422 do legado, sem texto novo", e um
+// texto a mais ali seria contrato novo sem necessidade.
+const CriticaPDFAcimaDoLimite = "PDF excede o tamanho máximo"
+
+// AssinaturaPDF é o prefixo que todo PDF tem, por exigência da própria
+// especificação do formato: `%PDF-` seguido da versão.
+//
+// Não é validação profunda: um arquivo que comece assim e esteja corrompido
+// continua passando, e é o extrator que descobre depois. O objetivo é barrar o
+// engano óbvio — planilha, imagem, arquivo vazio — antes de gastar uma
+// importação inteira nele.
+const AssinaturaPDF = "%PDF-"
+
+// PareceComPDF informa se o conteúdo começa com a assinatura do formato.
+//
+// Conteúdo vazio devolve false: um arquivo de zero byte não é PDF. Isso NÃO
+// entra em conflito com INV-P20, que trata de PDF TRUNCADO — truncado tem
+// cabeçalho e perde o fim; vazio não tem nada.
+func PareceComPDF(conteudo []byte) bool {
+	return len(conteudo) >= len(AssinaturaPDF) &&
+		string(conteudo[:len(AssinaturaPDF)]) == AssinaturaPDF
+}
