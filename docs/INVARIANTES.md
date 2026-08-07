@@ -638,6 +638,39 @@ mudando o estado final observável. Por isso a transação por importação é u
 evolução atrás de chave (F11), e a fase F4 usa **uma transação por chamada de
 gravação**, que preserva exatamente este comportamento.
 
+### DIVERGÊNCIA CONHECIDA — o que acontece DENTRO da chave que falha
+
+A tabela acima é silenciosa sobre a chave 3, e há uma diferença real ali.
+
+`salvar_recorte` do legado (`main.rs:573–631`) **não abre transação nenhuma** —
+o próprio código traz o comentário `// TODO: Implementar controle de transação?`.
+Cada par de `INSERT` é confirmado sozinho. Se a chave 3 tem cinco recortes e a
+gravação falha no terceiro, os **dois primeiros permanecem**.
+
+O porte usa uma transação por CHAMADA, o que torna a chave inteira atômica: na
+mesma situação, a chave 3 não deixa **nenhum** recorte.
+
+| | Legado | Porte |
+|---|---|---|
+| Chaves 1 e 2 | permanecem | permanecem |
+| Chave 3 (falha no 3º de 5 recortes) | **2 recortes permanecem** | **0 recortes** |
+| Linha órfã em `tb_recorte` sem texto | **possível** | impossível |
+| Chaves 4 e 5 | não processadas | não processadas |
+| Status final | −1 | −1 |
+
+**Por que é assim.** É consequência direta do achado **A03**: não há como tornar
+o par `tb_recorte`/`tb_recorte_texto` atômico sem transação, e a transação por
+chamada arrasta a chave inteira junto.
+
+**Como reproduzir o legado com exatidão sem reintroduzir a linha órfã.** Uma
+transação **por par de recortes**, em vez de por chamada — o par fica atômico
+(A03 corrigido) e o trabalho parcial da chave que falha sobrevive (INV-P14
+exato). O custo é uma transação por recorte em vez de uma por chave.
+
+**Alcance.** Só o caminho de FALHA de gravação, só a chave que falha, e só
+quando ela falha depois de já ter gravado algo. O caminho feliz é idêntico.
+Registrado em `docs/DECISOES-ABERTAS.md`, **D-22**.
+
 ---
 
 ## INV-P15 — Estouro numérico é erro, não truncamento

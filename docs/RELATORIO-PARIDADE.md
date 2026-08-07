@@ -374,7 +374,38 @@ $ golangci-lint run --build-tags=carga,integration ./...
 
 ## 9. Divergências aceitas
 
-**Nenhuma.** Não há divergência conhecida e não corrigida.
+> **Atualizado por uma auditoria posterior à F12**, feita com o Rust restaurado
+> do histórico e lido função por função. Ela encontrou **duas divergências que
+> nenhuma fase havia registrado**, ambas fora do contrato HTTP e do laço de
+> recorte, e nenhuma delas alterando o caminho feliz.
+
+### As duas divergências encontradas na auditoria
+
+| # | Divergência | Alcance | Decisão |
+|---|---|---|---|
+| **D-22** | O legado NÃO abre transação em `salvar_recorte` (`// TODO` no código). Falha no meio de uma chave deixa lá os recortes já gravados; o porte reverte a chave inteira. | Só o caminho de falha, só a chave que falha | Aberta. Opção B — transação por PAR — reproduz o legado sem reintroduzir a linha órfã de A03. |
+| **D-23** | Registros vão para **stderr em JSON**; o legado usava **stdout em texto**. | Coleta de log. `docker logs` e `journald` capturam os dois; `> app.log` fica vazio | Aberta. Uma linha para reverter, se preciso. |
+
+### As três correções deliberadas, inalteradas
+
+| # | Diferença | Justificativa |
+|---|---|---|
+| A02 | comparação da chave de API em tempo constante | corrige vazamento por tempo; resposta idêntica |
+| A03 | par recorte/texto atômico | corrige linha órfã; o legado tem `TODO` explícito |
+| A05 | corpo malformado responde 422 em vez de entrar em pânico | o legado fecha a conexão sem resposta |
+
+### As três mudanças de configuração, posteriores à F12
+
+Feitas a pedido, para destravar a execução local. Todas reversíveis por variável
+de ambiente.
+
+| Variável | Legado | Porte | Reverter |
+|---|---|---|---|
+| `SERVIDOR_IP` | `192.168.42.1` | `0.0.0.0` (superconjunto) | `SERVIDOR_IP=192.168.42.1` |
+| `API_KEY` | constante no código | padrão com o MESMO valor | `API_KEY=…` |
+| `DATABASE_URL` | obrigatória, pânico sem ela | padrão local | `DATABASE_URL=…` |
+
+**Nenhuma divergência de RECORTE conhecida e não corrigida.**
 
 As três diferenças **deliberadas** em relação ao legado — todas de
 robustez, nenhuma de conteúdo de banco — permanecem como estavam, documentadas

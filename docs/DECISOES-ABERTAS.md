@@ -33,6 +33,8 @@
 | D-18 | PDFs truncados chegam em produção? | — | aberta · **escalar a produto** | operação |
 | D-20 | O rodapé "salvo" pode sair das páginas de 404 e 405? | — | aberta | produto |
 | D-21 | O documento submetido passa a ser arquivado? | F11 (varredura) | **aberta** · descoberta na F11 | produto |
+| D-22 | Escopo da transação de gravação: por chave ou por recorte? | — | **aberta** · divergência conhecida | arquitetura |
+| D-23 | Os registros podem sair em stderr em vez de stdout? | — | **aberta** · divergência conhecida | operação |
 
 ---
 
@@ -778,3 +780,96 @@ mudança de comportamento é introduzida por esta decisão ficar aberta.
 **Encaminhamento.** É decisão de produto e de infraestrutura, não de
 arquitetura: envolve custo de armazenamento, retenção e possivelmente
 tratamento de dado pessoal contido nos diários.
+
+---
+
+## D-22 · Escopo da transação de gravação: por chave ou por recorte?
+
+**Descoberta na auditoria de paridade posterior à F12.**
+
+**O fato.** `salvar_recorte` do legado (`main.rs:573–631`) **não abre transação
+nenhuma** — o código traz `// TODO: Implementar controle de transação?`. Cada
+par de `INSERT` é confirmado sozinho.
+
+O porte usa **uma transação por chamada**, o que torna a chave inteira atômica.
+
+**A diferença observável.** Chave com cinco recortes, falha ao gravar o
+terceiro:
+
+| | Legado | Porte |
+|---|---|---|
+| Recortes daquela chave | **2 permanecem** | **0** |
+| Linha órfã em `tb_recorte` sem texto | possível | impossível |
+
+O caminho feliz é idêntico. A diferença só existe quando a gravação falha no
+meio de uma chave.
+
+**Como surgiu.** Consequência direta do achado **A03**: o par
+`tb_recorte`/`tb_recorte_texto` não fica atômico sem transação, e a transação
+por chamada arrasta a chave inteira.
+
+**Opções.**
+
+| Opção | Efeito | Custo |
+|---|---|---|
+| A — manter por chamada | O que existe hoje. Mais limpo que o legado, mas diverge dele no caminho de falha. | nenhum |
+| B — transação por PAR de recortes | Reproduz o legado com exatidão E mantém A03 corrigido. | uma transação por recorte em vez de uma por chave |
+| C — sem transação | Paridade total, inclusive a linha órfã. | reintroduz o defeito A03 |
+
+**Padrão provisório.** Manter a **opção A**. A diferença só aparece num caminho
+de falha raro, e o estado que ela produz é estritamente mais limpo — nunca há
+recorte sem texto.
+
+**Por que ainda assim é decisão.** A regra do projeto é paridade total, e isto é
+uma divergência. Se ela precisar sumir, a **opção B** a elimina sem custo de
+correção: é trocar o escopo do `EmTransacao` de `Salvar` para o laço interno.
+
+**Como verificar se importa em produção.**
+```sql
+-- importações em -1 que ainda assim têm recortes: é o caso em que o escopo
+-- da transação muda o resultado
+SELECT count(*) FROM recorte.tb_importacao i
+WHERE i.status = -1
+  AND EXISTS (SELECT 1 FROM recorte.tb_recorte r WHERE r.id_importacao = i.id_importacao);
+```
+Contagem desprezível significa que o caminho de falha quase não acontece e a
+opção A se sustenta.
+
+---
+
+## D-23 · Os registros podem sair em stderr em vez de stdout?
+
+**Descoberta na auditoria de paridade posterior à F12.**
+
+**O fato.** O legado usa `tracing_subscriber::fmt().init()` (`main.rs:34`), cuja
+saída padrão é **stdout**, e `println!` para as mensagens de sinal
+(`main.rs:104–105`) — também stdout.
+
+O porte escreve **tudo em stderr** (`cmd/recorte-api/main.go:83`), em **JSON**
+por padrão, com campos estruturados.
+
+**Duas diferenças, não uma.**
+
+| | Legado | Porte |
+|---|---|---|
+| Destino | stdout | **stderr** |
+| Formato | texto do `tracing` | **JSON** (`LOG_FORMATO=text` dá texto do `slog`, ainda diferente) |
+
+**Por que não foi tratado como divergência até aqui.** A fase F2 tratou
+observabilidade como MELHORIA, não como contrato — registro estruturado,
+identificador de requisição e nível configurável são o ponto de ter reescrito.
+A especificação nunca prometeu paridade de log.
+
+**Quando importa.** `docker logs`, `journald` e a maioria dos coletores capturam
+os dois fluxos e a diferença é invisível. Ela aparece em:
+
+- `./recorte-api > app.log` — o arquivo fica **vazio**;
+- qualquer coisa que analise o texto do log do legado — deixa de casar, e isso
+  vale para o formato tanto quanto para o destino.
+
+**Padrão provisório.** Manter stderr e JSON. É a convenção para serviço em
+contêiner, e o formato estruturado é o que torna o log consultável.
+
+**Se a resposta for "precisa ser stdout".** É a troca de `os.Stderr` por
+`os.Stdout` em `cmd/recorte-api/main.go`, uma linha. O formato é
+`LOG_FORMATO=text`, que já existe.
