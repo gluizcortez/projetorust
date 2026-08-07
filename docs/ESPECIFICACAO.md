@@ -169,7 +169,8 @@ O que difere entre legado e porte é **onde os bytes ficam durante a requisiçã
 | Sobrevive à requisição? | **não** — `Drop` de `FilePart` apaga arquivo e diretório | — |
 | Persiste depois? | **não** | **não** |
 
-MEDIDO por `tools/sonda-http --bin sonda-arquivo`. O efeito observável pela API é
+MEDIDO por `tools/sonda-http --bin sonda-arquivo` — a sonda não está na árvore;
+volta com `git checkout 71e5775 -- tools/sonda-http`. O efeito observável pela API é
 **idêntico**; a diferença é o meio, e importa para quem dimensiona `/tmp` ou
 monta o contêiner com sistema de arquivos somente leitura.
 

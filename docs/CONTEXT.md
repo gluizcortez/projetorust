@@ -2355,3 +2355,5 @@ continua aparecendo.
 | Versões varridas | 0.65.0 · 0.70.0 · 0.75.0 · 0.80.0 · 0.85.0 · 0.88.0 · 0.89.0 · 0.90.0 · 0.94.0 · 0.95.0 · 0.95.1 · 0.95.2 |
 | Resposta do legado ao DOU real | `400 PDF não enviado` |
 | Resposta do porte ao DOU real | `200 PDF carregado com sucesso`, 5 recortes |
+
+A sonda saiu da árvore, como as anteriores: `git checkout 71e5775 -- tools/sonda-http`.

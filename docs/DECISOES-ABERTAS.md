@@ -1004,7 +1004,8 @@ produção?".
 
 ### O fato medido
 
-`tools/sonda-http --bin sonda-arquivo` reconstrói o caminho de `main.rs:203-234`
+`tools/sonda-http --bin sonda-arquivo` (recuperável com
+`git checkout 71e5775 -- tools/sonda-http`) reconstrói o caminho de `main.rs:203-234`
 e submete multipart real contra um servidor Salvo real:
 
 | Tamanho da parte `pdf` | Corpo total | Resposta |
