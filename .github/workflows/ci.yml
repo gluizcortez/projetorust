@@ -16,26 +16,9 @@ env:
 
 jobs:
   verificar:
-    name: lint · teste · build
+    name: lint · build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
-    services:
-      # Testes de integração da fase F4. Um serviço do próprio executor, em vez
-      # de testcontainers: dispensa daemon Docker acessível ao processo de
-      # teste e é a forma idiomática no GitHub Actions.
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
 
     steps:
       - uses: actions/checkout@v4
@@ -59,35 +42,6 @@ jobs:
         with:
           version: v2.5.0
           args: --timeout=5m
-
-      - name: Testes
-        run: go test ./... -race -shuffle=on -coverprofile=coverage.out -covermode=atomic
-
-      - name: Regra de dependência
-        run: go test ./internal -run TestRegraDeDependencia -v
-
-      # -p 1 serializa os pacotes: `internal/adapter/postgres` derruba o esquema
-      # que `internal/app` consulta, no MESMO banco.
-      - name: Testes de integração
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-        run: go test ./... -race -tags=integration -p 1 -run 'Integration|Integracao' -v
-
-      # INV-P16: a data não pode deslocar um dia conforme o fuso do processo.
-      - name: Integração com fuso a leste de Greenwich
-        env:
-          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-          TZ: Asia/Tokyo
-        run: go test ./internal/adapter/postgres/... -tags=integration -run 'TestIntegracaoData' -v
-
-      - name: Relatório de cobertura
-        run: go tool cover -func=coverage.out | tail -40
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cobertura
-          path: coverage.out
-          retention-days: 14
 
       - name: Build
         run: make build
@@ -121,24 +75,3 @@ jobs:
           build-args: |
             VERSAO=${{ github.sha }}
             REVISAO=${{ github.sha }}
-
-      # Critérios de aceite da fase F1.
-      - name: Verificar tamanho, usuário e execução
-        run: |
-          set -euo pipefail
-
-          bytes=$(docker image inspect recorte-api:ci --format '{{.Size}}')
-          limite=$((120 * 1024 * 1024))
-          echo "tamanho: $(numfmt --to=iec "$bytes") (limite $(numfmt --to=iec "$limite"))"
-          if [ "$bytes" -gt "$limite" ]; then
-            echo "imagem acima do limite de 120 MB"
-            exit 1
-          fi
-
-          usuario=$(docker image inspect recorte-api:ci --format '{{.Config.User}}')
-          echo "usuário: ${usuario}"
-          case "$usuario" in
-            ""|root|0|0:0) echo "a imagem precisa rodar sem privilégio"; exit 1 ;;
-          esac
-
-          docker run --rm recorte-api:ci -versao

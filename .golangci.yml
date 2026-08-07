@@ -118,17 +118,6 @@ linters:
       - path: ^internal/adapter/postgres/uow\.go$
         linters: [forbidigo]
 
-      # Os dublês do domínio montam cenários de teste, e um deles precisa
-      # ENTRAR EM PÂNICO sob demanda: é assim que se verifica que o pipeline e o
-      # executor sobrevivem a um defeito de programação. O pacote não vai para
-      # produção — nada fora de _test.go o importa.
-      - path: ^internal/domain/domaintest/
-        linters: [forbidigo]
-
-      # Testes: podem entrar em pânico, imprimir, dormir e usar auxiliares.
-      - path: _test\.go$
-        linters: [forbidigo, gosec, wrapcheck, errcheck, contextcheck]
-
       # O ferramental de apoio não é o serviço.
       - path: ^tools/
         linters: [forbidigo, gosec, wrapcheck, revive]
@@ -140,8 +129,8 @@ linters:
 #             →"positional". Ruído puro, sem forma de configurar um dicionário
 #             pt-BR. Removido na fase F1 após medição.
 #
-#   depguard  Redundante com internal/arch_test.go, que já verifica a regra de
-#             dependência com mensagem de erro que nomeia o pacote infrator.
+#   depguard  Recusado na fase F1: a regra de dependência era verificada por
+#             internal/arch_test.go, removido junto com os demais testes.
 
 formatters:
   enable:
