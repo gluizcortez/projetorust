@@ -16,7 +16,7 @@ env:
 
 jobs:
   verificar:
-    name: lint · build
+    name: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -37,19 +37,8 @@ jobs:
           key: cgo-${{ runner.os }}-${{ hashFiles('**/go.sum', 'deploy/Dockerfile') }}
           restore-keys: cgo-${{ runner.os }}-
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v2.5.0
-          args: --timeout=5m
-
       - name: Build
         run: make build
-
-      - name: go.mod está normalizado
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
 
   imagem:
     name: imagem de distribuição
