@@ -10,6 +10,14 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// As tabelas de exceção Unicode são geradas comparando o Go com o próprio
+// Rust, runa a runa. Ver tools/gerar-tabela-diacriticos.
+//
+// A diretiva vive aqui, e não nas tabelas, porque elas são o ALVO da geração:
+// `go generate` as sobrescreve, e a diretiva se perderia junto.
+//
+//go:generate sh -c "cd ../.. && cargo build --release --quiet --manifest-path tools/gerar-tabela-diacriticos/dump/Cargo.toml && tools/gerar-tabela-diacriticos/dump/target/release/dump-unicode > /tmp/unicode.tsv && go run ./tools/gerar-tabela-diacriticos /tmp/unicode.tsv"
+
 // sequenciaHifenQuebra é o que a junção procura: hífen seguido de quebra de
 // linha, exatamente como o padrão `(\w+)(-\n)` do legado.
 const sequenciaHifenQuebra = "-\n"

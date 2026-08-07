@@ -75,7 +75,10 @@ linters:
         - name: exported
           arguments:
             - disableStutteringCheck # nomes em português não sofrem do problema
-        - name: package-comments
+        # package-comments foi desligada junto com a remoção dos doc.go: sem
+        # eles, nenhum pacote tem comentário de pacote e a regra acusaria os
+        # quinze. O comentário obrigatório em identificador EXPORTADO continua
+        # valendo — é a regra `exported`, acima.
         - name: context-as-argument
         - name: context-keys-type
         - name: error-return
