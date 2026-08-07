@@ -7,3 +7,6 @@ coverage.out
 # Ferramental local
 /tmp/
 *.log
+
+# Sondas em Rust, quando restauradas do histórico para remedir
+tools/**/target/

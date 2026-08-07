@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gluizcortez/projetorust/internal/adapter/httpapi/middleware"
@@ -30,6 +31,10 @@ const (
 const (
 	RotaPing = "/ping"
 	RotaPDF  = "/pdf"
+
+	// RotaRaiz não tem manipulador: no legado ela existe como rota e não tem
+	// método, o que o Salvo responde com 405. Ver normalizarCaminho.
+	RotaRaiz = "/"
 
 	// RotaImportacao é o prefixo de GET /importacao/{id} (STATUS_ENDPOINT).
 	RotaImportacao = "/importacao"
@@ -166,7 +171,19 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 	}
 
 	roteador := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rota := normalizarCaminho(r.URL.Path)
+		rota := normalizarCaminho(r.URL.EscapedPath())
+
+		// MEDIDO: a raiz responde 405, não 404 — em QUALQUER método, e em
+		// qualquer forma que colapse para zero segmentos (`/`, `//`, `///`).
+		//
+		// No legado ela é rota de verdade: `Router::new()` casa o caminho
+		// vazio e não tem `get`/`post`, então o Salvo decide "existe, sem este
+		// método". Um `404` aqui seria dizer que a raiz não existe.
+		if rota == RotaRaiz {
+			EscreverCatcher(w, r, http.StatusMethodNotAllowed)
+			return
+		}
+
 		if d.StatusEndpoint {
 			rota = colapsarImportacao(rota)
 		}
@@ -214,25 +231,58 @@ func colapsarImportacao(rota string) string {
 
 // normalizarCaminho reproduz como o roteador do Salvo compara caminhos.
 //
-// MEDIDO por `tools/sonda-http`: o caminho é partido em segmentos, e segmentos
-// VAZIOS e `.` são ignorados. Todos estes chegam ao mesmo manipulador:
+// Recebe o caminho na forma CRUA — `r.URL.EscapedPath()`, não `r.URL.Path` —
+// e é essencial que assim seja. Ver "a ordem importa", abaixo.
 //
-//	/ping   /ping/   /ping//   //ping   /ping///   /./ping
+// MEDIDO por `tools/sonda-http --bin sonda-caminho` (Salvo 0.95.2, servidor de
+// verdade, linha de requisição escrita byte a byte). A regra é:
 //
-// e `/ping/x` NÃO chega — dois segmentos não casam com um.
+//	parta em `/`, descarte os segmentos VAZIOS, decodifique cada segmento
+//	que sobrou, e junte de volta com `/`.
 //
-// O `ServeMux` do Go não faz isso: com o padrão "/ping", uma requisição a
-// "/ping/" devolve 404. Sem esta normalização, seis formas que hoje respondem
-// `pong` passariam a responder 404.
+// Daí saem todas as observações:
 //
-// `..` NÃO é resolvido, de propósito: a sonda não mediu esse caso, e resolver
-// travessia de caminho seria inventar comportamento — inclusive de segurança —
-// que o legado pode não ter. Um `..` vira segmento literal e o caminho não casa.
-func normalizarCaminho(caminho string) string {
+//	/ping   /ping/   /ping//   //ping   /ping///     200 — vazios somem
+//	/pi%6Eg   /%70ing   /%70%69%6E%67                200 — o segmento decodifica
+//	/ping/x                                          404 — dois segmentos
+//	/./ping   /.   /ping/..   /x/../ping             404 — `.` e `..` são segmentos
+//	/ping%20   /ping+   /ping%09   /ping%00          404 — não vira `ping`
+//	/ping%2F   /%2Fping                              404 — ver abaixo
+//	/   //   ///                                     405 — ver abaixo
+//
+// # A ordem importa: decodificar DEPOIS de partir
+//
+// Em Go, `r.URL.Path` já vem decodificado, então `%2F` VIRA barra antes de
+// qualquer fatiamento e `/ping%2F` colapsa para `/ping` — 200 onde o legado
+// responde 404. É por isso que a entrada aqui é a forma crua: o Salvo parte
+// primeiro e decodifica depois, e uma barra que nasceu de `%2F` nunca vira
+// separador.
+//
+// O efeito colateral é de segurança, e é o lado bom: nenhuma forma codificada
+// alcança uma rota que a forma literal não alcançaria.
+//
+// # `.` e `..` NÃO são resolvidos
+//
+// Não por omissão — por medição. `/./ping` responde 404 no legado. A versão
+// anterior desta função descartava `.` junto com os vazios e respondia 200,
+// afirmando no comentário que isso havia sido medido. Não havia: a sonda da F9
+// só mediu `/ping/`. Agora foi.
+//
+// # Percentual inválido
+//
+// `/ping%zz` não decodifica; o segmento fica como está e não casa — 404 no
+// legado. Em Go a requisição nem chega aqui: o servidor a recusa com 400 na
+// análise da URL. É divergência conhecida e sem conserto barato — D-24.
+func normalizarCaminho(cru string) string {
 	var segmentos []string
-	for _, s := range strings.Split(caminho, "/") {
-		if s == "" || s == "." {
+	for _, s := range strings.Split(cru, "/") {
+		if s == "" {
 			continue
+		}
+		// Erro de decodificação mantém o segmento cru, que é o que o legado
+		// faz na prática: sem decodificar, não casa com rota nenhuma.
+		if decodificado, err := url.PathUnescape(s); err == nil {
+			s = decodificado
 		}
 		segmentos = append(segmentos, s)
 	}

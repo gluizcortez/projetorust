@@ -87,7 +87,7 @@ type respostaDeImportacao struct {
 // diário foi submetido e quantas ocorrências ele gerou, o que é informação do
 // cliente, não pública.
 func (s *servico) consultarImportacao(w http.ResponseWriter, r *http.Request) {
-	id, ok := identificadorDaRota(r.URL.Path)
+	id, ok := identificadorDaRota(r.URL.EscapedPath())
 	if !ok {
 		s.escritor.Escrever(w, r, http.StatusBadRequest, TextoIdentificadorInvalido, nil)
 		return

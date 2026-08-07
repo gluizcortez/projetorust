@@ -35,6 +35,7 @@
 | D-21 | O documento submetido passa a ser arquivado? | F11 (varredura) | **aberta** · descoberta na F11 | produto |
 | D-22 | Escopo da transação de gravação: por chave ou por recorte? | — | **aberta** · divergência conhecida | arquitetura |
 | D-23 | Os registros podem sair em stderr em vez de stdout? | — | **aberta** · divergência conhecida | operação |
+| D-24 | Caminho malformado: 400 do `net/http` onde o legado dá 404 | — | **aberta** · divergência conhecida, sem conserto barato | arquitetura |
 
 ---
 
@@ -394,18 +395,42 @@ cabeçalho `Accept`:
 O `http.NotFound` do Go devolveria `404 page not found\n` em `text/plain` para
 todos os casos — corpo, tipo e negociação errados de uma vez só.
 
-### Normalização de caminho
+### Normalização de caminho — **CORRIGIDA na segunda rodada**
 
-Medida separadamente: o caminho é partido em segmentos, e segmentos **vazios** e
-`.` são ignorados. Todos estes chegam ao mesmo manipulador:
+⚠ **A versão anterior desta seção estava errada, e estava marcada como medida.**
+A sonda da F9 mediu `/ping/` e `/PING`; o resto — `//ping`, `/ping//`, `/./ping`
+— foi **inferido** da leitura do Salvo e escrito como se tivesse sido medido. O
+porte copiou a inferência e ficou com um `/./ping` respondendo 200 onde o legado
+responde 404.
+
+A segunda rodada (`tools/sonda-http --bin sonda-caminho`, 45 casos, servidor de
+verdade com a linha de requisição escrita byte a byte) mediu. A regra é:
+
+> parta em `/`, descarte os segmentos **vazios**, decodifique **cada segmento**
+> que sobrou, e junte de volta com `/`.
+
+Daí saem todas as observações:
 
 ```
-/ping    /ping/    /ping//    //ping    /ping///    /./ping
+200   /ping   /ping/   /ping//   //ping   /ping///
+200   /pi%6Eg   /%70ing   /%70%69%6E%67        o segmento decodifica
+405   /   //   ///                             zero segmentos É a raiz
+404   /ping/x                                  dois segmentos
+404   /./ping   /.   /ping/..   /x/../ping     `.` e `..` são segmentos
+404   /ping%20   /ping+   /ping%09   /ping%00  não decodifica para `ping`
+404   /ping%2F   /%2Fping   /ping%2f           `%2F` não vira separador
 ```
 
-e `/ping/x` **não** chega. O `ServeMux` do Go não faz isso: com o padrão
-`/ping`, uma requisição a `/ping/` devolve 404. Sem a normalização,
-**seis formas que hoje respondem `pong` passariam a responder 404.**
+O `ServeMux` do Go não faz nada disso: com o padrão `/ping`, uma requisição a
+`/ping/` devolve 404. Sem a normalização, **cinco formas que hoje respondem
+`pong` passariam a responder 404.**
+
+**A ordem importa.** Em Go, `r.URL.Path` já vem decodificado, então `%2F` vira
+barra **antes** do fatiamento e `/ping%2F` colapsa para `/ping` — 200 onde o
+legado dá 404. O porte roteia por `r.URL.EscapedPath()` e decodifica segmento a
+segmento, que é a ordem do Salvo.
+
+O que o porte **não** alcança está em **D-24**.
 
 ### O que ficou implementado
 
@@ -873,3 +898,72 @@ contêiner, e o formato estruturado é o que torna o log consultável.
 **Se a resposta for "precisa ser stdout".** É a troca de `os.Stderr` por
 `os.Stdout` em `cmd/recorte-api/main.go`, uma linha. O formato é
 `LOG_FORMATO=text`, que já existe.
+
+---
+
+## D-24 · Caminho malformado: 400 do `net/http` onde o legado dá 404
+
+**Descoberta na segunda rodada de medição do roteamento**, motivada por um
+relato de campo: um `curl` com espaço sobrando na URL virou `GET /ping%20` e
+recebeu 404. A investigação confirmou que **esse caso está certo** — o legado
+também responde 404 —, e no caminho encontrou 14 casos em que o porte
+divergia. Onze foram corrigidos. Estes cinco não têm conserto proporcional.
+
+### O que diverge
+
+| Requisição crua | Legado | Porte | Camada |
+|---|---|---|---|
+| `GET /ping%` | 404 + catcher | **400** + `400 Bad Request` | análise de URL do `net/http` |
+| `GET /ping%2` | 404 + catcher | **400** | idem |
+| `GET /ping%zz` | 404 + catcher | **400** | idem |
+| `GET /ping#f` | 200 `pong` | **404** + catcher | idem |
+| `GET /pdf#x` | 405 + catcher | **404** + catcher | idem |
+| `GET /ping\tx` | 400, corpo **vazio** | 400, corpo `400 Bad Request` | idem |
+
+### Por que não tem conserto barato
+
+**Percentual inválido.** `url.ParseRequestURI` recusa `/ping%zz`, e o
+`net/http` responde 400 **sozinho**, antes de qualquer `Handler`. Nenhum
+middleware vê a requisição — o `http.Server` não expõe gancho para requisição
+malformada. A única saída seria um invólucro de `net.Listener` reescrevendo a
+linha de requisição antes de o servidor a analisar, o que significa
+reimplementar o enquadramento do HTTP — *keep-alive*, *pipelining*, TLS — a
+troco de trocar um código de erro por outro.
+
+**Fragmento cru.** O Salvo descarta `#…` e roteia `/ping`; o Go mantém a
+cerquilha no caminho. E os dois casos são **indistinguíveis** depois da análise:
+MEDIDO, `EscapedPath()` devolve `/ping%23f` tanto para `/ping#f` quanto para
+`/ping%23f`, que no legado respondem 200 e 404. Separá-los exigiria rotear por
+`r.RequestURI` — trocando a entrada do roteador inteiro, com a forma absoluta
+(`http://host/path`, de procurador) e o `*` do `OPTIONS` junto.
+
+### Por que a recomendação é ACEITAR
+
+1. **Nenhuma é alcançável por cliente conforme.** Pela RFC 3986 §3.5 o
+   fragmento **não é enviado ao servidor**: navegador, `curl`, Postman,
+   `reqwest` e o cliente do Go todos o cortam. Percentual inválido e tabulação
+   crua na linha de requisição também não saem de biblioteca nenhuma. Só um
+   socket escrito à mão chega a estes casos.
+2. **Nenhuma perde função nem afrouxa acesso.** Nos três primeiros a resposta
+   continua sendo erro; nos dois de fragmento o porte é **mais restritivo** que
+   o legado — 404 onde ele daria 200 ou 405 —, então nada que o legado protegia
+   passa a ser alcançável.
+3. **O custo do conserto é desproporcional**, e o próprio conserto é a classe de
+   código que introduz falha pior do que a que corrige.
+
+### O que ficou no lugar
+
+`internal/adapter/httpapi/caminho_test.go` tem a tabela
+`divergenciasConhecidas`, que **asserta** cada linha acima — não anota, asserta.
+Se uma versão futura do Go passar a responder o que o legado responde, o teste
+falha pedindo que a linha saia daqui e volte à tabela medida. Se passar a
+responder uma terceira coisa, falha também.
+
+### Se a resposta for "precisa ser idêntico"
+
+Só há um caminho: intermediar a conexão antes do `net/http`. Estimativa honesta
+— um `net.Listener` que envolve cada `net.Conn` com um leitor que localiza a
+linha de requisição de **cada** requisição da conexão (não só a primeira),
+reescreve `%` inválido como `%25` e corta o fragmento. Precisa acertar
+`Content-Length`, corpo em pedaços e atualização para WebSocket, e passa a ser
+código de segurança nosso, não do `net/http`. Recomendação: não.

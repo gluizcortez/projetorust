@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/gluizcortez/projetorust/internal/app"
 	"github.com/gluizcortez/projetorust/internal/config"
 	"github.com/gluizcortez/projetorust/internal/platform/observability"
@@ -24,6 +26,47 @@ import (
 //
 // Rodam com `make test-integration` ou com TEST_DATABASE_URL definida.
 
+// prepararEsquema recria o esquema `recorte` do zero no banco de teste.
+//
+// Existe porque estes testes NÃO podem depender do resíduo de outro pacote.
+// Era o que acontecia: o esquema vinha de `internal/adapter/postgres`, que o
+// recria a cada teste e o deixa no estado do último — e `internal/app`
+// consultava as tabelas torcendo para que ainda estivessem lá. O sintoma era um
+// **500 onde o teste espera 404**, porque a consulta batia em tabela ausente.
+//
+// O `-p 1` do alvo `test-integration` serializa os pacotes e evita que os dois
+// se atropelem no meio; ele NÃO garante que o outro pacote deixou o esquema de
+// pé. Esta função garante.
+//
+// Usa `db/init/`, que é o mesmo esquema INFERIDO que o compose aplica — D-13
+// segue aberta, e o arquivo diz isso.
+func prepararEsquema(t *testing.T, dsn string) {
+	t.Helper()
+	ctx := context.Background()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("abrindo pool para preparar o esquema: %v", err)
+	}
+	defer pool.Close()
+
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS recorte CASCADE`); err != nil {
+		t.Fatalf("limpando o esquema: %v", err)
+	}
+	for _, arquivo := range []string{
+		"../../db/init/01-esquema.sql",
+		"../../db/init/02-dados-de-exemplo.sql",
+	} {
+		bruto, err := os.ReadFile(arquivo)
+		if err != nil {
+			t.Fatalf("lendo %s: %v", arquivo, err)
+		}
+		if _, err := pool.Exec(ctx, string(bruto)); err != nil {
+			t.Fatalf("aplicando %s: %v", arquivo, err)
+		}
+	}
+}
+
 func configComBanco(t *testing.T) *config.Config {
 	t.Helper()
 
@@ -31,6 +74,7 @@ func configComBanco(t *testing.T) *config.Config {
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL não definida — rode `make test-integration`")
 	}
+	prepararEsquema(t, dsn)
 
 	t.Setenv("DATABASE_URL", dsn)
 	t.Setenv("API_KEY", "chave-de-integracao")
@@ -174,6 +218,7 @@ func TestIntegracaoTodasAsChavesLigadas(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL não definida — rode `make test-integration`")
 	}
+	prepararEsquema(t, dsn)
 
 	t.Setenv("DATABASE_URL", dsn)
 	t.Setenv("API_KEY", "chave-de-integracao")

@@ -327,6 +327,13 @@ func autenticadorNu(t *testing.T) http.Handler {
 
 // TestRoteamentoMedido reproduz, uma a uma, as observações de `tools/sonda-http`
 // sobre rota inexistente e método não permitido (D-08).
+//
+// Duas linhas mudaram na segunda rodada de medição (`--bin sonda-caminho`), e
+// as duas afirmavam antes o que ninguém tinha medido: `/./ping` responde 404,
+// não 200, e `/` responde 405, não 404. O contrato completo do caminho —
+// incluindo espaço e percentual-codificação — está em caminho_test.go, que
+// mede por socket cru; aqui ficam só os casos que `httptest.NewRequest`
+// consegue exprimir sem passar pelo analisador de URL.
 func TestRoteamentoMedido(t *testing.T) {
 	casos := []struct {
 		metodo, caminho string
@@ -337,11 +344,11 @@ func TestRoteamentoMedido(t *testing.T) {
 		{http.MethodGet, "/ping/", http.StatusOK, "barra ao final é normalizada"},
 		{http.MethodGet, "/ping//", http.StatusOK, "barras repetidas ao final"},
 		{http.MethodGet, "//ping", http.StatusOK, "barra repetida no início"},
-		{http.MethodGet, "/./ping", http.StatusOK, "segmento `.` é ignorado"},
+		{http.MethodGet, "/./ping", http.StatusNotFound, "`.` é segmento, não é ignorado"},
 		{http.MethodGet, "/ping/x", http.StatusNotFound, "dois segmentos não casam com um"},
 		{http.MethodGet, "/PING", http.StatusNotFound, "o caminho é sensível a maiúsculas"},
 		{http.MethodGet, "/naoexiste", http.StatusNotFound, "rota inexistente"},
-		{http.MethodGet, "/", http.StatusNotFound, "a raiz não é rota"},
+		{http.MethodGet, "/", http.StatusMethodNotAllowed, "a raiz é rota sem método"},
 		{http.MethodPost, "/ping", http.StatusMethodNotAllowed, "método não permitido"},
 		{http.MethodDelete, "/ping", http.StatusMethodNotAllowed, "idem"},
 		{http.MethodGet, "/pdf", http.StatusMethodNotAllowed, "o método perde ANTES da autenticação"},

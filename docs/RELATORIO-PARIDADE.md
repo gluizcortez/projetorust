@@ -386,6 +386,58 @@ $ golangci-lint run --build-tags=carga,integration ./...
 | **D-22** | O legado NÃO abre transação em `salvar_recorte` (`// TODO` no código). Falha no meio de uma chave deixa lá os recortes já gravados; o porte reverte a chave inteira. | Só o caminho de falha, só a chave que falha | Aberta. Opção B — transação por PAR — reproduz o legado sem reintroduzir a linha órfã de A03. |
 | **D-23** | Registros vão para **stderr em JSON**; o legado usava **stdout em texto**. | Coleta de log. `docker logs` e `journald` capturam os dois; `> app.log` fica vazio | Aberta. Uma linha para reverter, se preciso. |
 
+### A divergência encontrada pela segunda rodada de medição do caminho
+
+| # | Divergência | Alcance | Decisão |
+|---|---|---|---|
+| **D-24** | Caminho malformado: `/ping%zz` responde **400** do `net/http` onde o legado dá 404 com o catcher; `/ping#f` responde **404** onde o legado dá 200. | Só requisição que **nenhum cliente conforme produz** — a RFC 3986 §3.5 não envia fragmento, e percentual inválido não sai de biblioteca alguma | Aberta, recomendação **aceitar**. O conserto exige interceptar a conexão antes do `net/http`. |
+
+Esta rodada corrigiu **onze** divergências e deixou **cinco** de código de
+status, mais uma que difere só no corpo (`/ping\tx`: 400 nos dois lados, corpo
+vazio no legado). O que a motivou está na seção 9.1.
+
+### 9.1 A segunda rodada de medição do caminho
+
+**Motivada por um relato de campo**, não por um teste: um `curl` disparado com
+espaço sobrando na URL virou `GET /ping%20` e recebeu 404. O primeiro achado foi
+que **esse caso estava certo** — o legado também responde 404. O segundo foi que
+onze outros não estavam.
+
+A causa é a mesma dos dois defeitos da F12, e é a lição que este projeto já
+tinha aprendido uma vez: **uma inferência escrita como se fosse medição.** O
+comentário de `normalizarCaminho` dizia "MEDIDO por `tools/sonda-http`" e listava
+`/ping`, `/ping/`, `/ping//`, `//ping`, `/ping///` e `/./ping` como equivalentes.
+A sonda da F9 havia medido **duas** dessas formas. As outras vieram de ler o
+Salvo, e uma delas estava errada.
+
+`tools/sonda-http --bin sonda-caminho` mediu 42 casos contra um servidor Salvo de
+verdade, com a linha de requisição escrita byte a byte num socket — sem cliente
+HTTP no meio, porque é a forma **crua** do caminho que está em jogo.
+
+| Classe | Casos | Legado | Porte antes | Estado |
+|---|---|---|---|---|
+| A raiz, em qualquer forma e método | `/` `//` `///` | **405** | 404 | corrigido |
+| O segmento `.` | `/./ping` `/./././ping` | **404** | 200 | corrigido |
+| A barra codificada | `/ping%2F` `/%2Fping` `/ping%2f` `/ping%2F%2F` | **404** | 200 | corrigido |
+| Espaço e afins | `/ping%20` `/ping+` `/ping%09` `/ping%00` | 404 | 404 | já batia |
+| Percentual inválido | `/ping%` `/ping%2` `/ping%zz` | 404 | **400** | **D-24** |
+| Fragmento cru | `/ping#f` `/pdf#x` | 200 / 405 | **404** | **D-24** |
+
+**A correção de fundo foi de ordem, não de casos.** O porte roteava por
+`r.URL.Path`, que em Go já vem **decodificado** — então `%2F` virava barra antes
+do fatiamento e `/ping%2F` colapsava para `/ping`. O Salvo parte primeiro e
+decodifica depois. O roteamento passou a ser sobre `r.URL.EscapedPath()`,
+decodificando **segmento a segmento**.
+
+O efeito colateral é de segurança e é o lado bom: nenhuma forma codificada
+alcança rota que a forma literal não alcançaria. `TestCaminhoNaoEscapaDaRota
+PorCodificacao` fixa isso para `/pdf`.
+
+**A medição bateu antes de a correção existir**, na ordem certa: o teste novo
+acusou 14 divergências contra o roteador então em produção, e passou a zero —
+menos as cinco de D-24, que ficaram **assertadas** em
+`divergenciasConhecidas`, não apenas anotadas.
+
 ### As três correções deliberadas, inalteradas
 
 | # | Diferença | Justificativa |

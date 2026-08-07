@@ -271,13 +271,52 @@ Capturado na fase F9 por `tools/sonda-http`, que reconstrói o roteador de
 | `text/plain` | `text/plain` | `code: …\n\nname: …\n\nbrief: …` |
 | `application/xml` | `application/xml` | `<?xml …><Data>…</Data>` |
 
-**Normalização de caminho:** o caminho é partido em segmentos, e segmentos
-vazios e `.` são ignorados. `/ping`, `/ping/`, `/ping//`, `//ping`, `/ping///` e
-`/./ping` chegam todos ao mesmo manipulador; `/ping/x` não chega.
-
 ⚠ O HTML foi medido contra **salvo 0.95.2** e não é contrato estável entre
 versões do arcabouço. Status, `Content-Type` e negociação são. Reconfirmar
 quando **D-15** for respondida.
+
+#### 1.5.1 Normalização de caminho — **MEDIDO (segunda rodada)**
+
+A primeira rodada (F9) só mediu `/ping/` e `/PING`, e o resto desta seção era
+**inferido apesar de estar marcado como medido**. A segunda rodada
+(`tools/sonda-http --bin sonda-caminho`) mediu 45 casos contra o Salvo de
+verdade e corrigiu duas afirmações. Detalhe em **D-08** e **D-24**.
+
+A regra medida, em uma frase:
+
+> parta em `/`, descarte os segmentos **vazios**, decodifique **cada segmento**
+> que sobrou, e junte de volta com `/`.
+
+| Caminho | Código | Por quê |
+|---|---|---|
+| `/ping` `/ping/` `/ping//` `//ping` `/ping///` | 200 | segmento vazio some |
+| `/pi%6Eg` `/%70ing` `/%70%69%6E%67` | 200 | o segmento decodifica para `ping` |
+| `/ping?x=1` | 200 | a query não é caminho |
+| `/` `//` `///` | **405** | zero segmentos **é a raiz**, que existe sem método |
+| `/ping/x` | 404 | dois segmentos não casam com um |
+| `/./ping` `/.` `/./ ` `/ping/..` `/x/../ping` | **404** | `.` e `..` são segmentos, **não** são ignorados |
+| `/ping%20` `/%20ping` `/ping+` `/ping%09` `/ping%00` | 404 | não decodifica para `ping` |
+| `/ping%2F` `/%2Fping` `/ping%2f` | **404** | barra vinda de `%2F` **não** vira separador |
+| `/ping%23f` | 404 | cerquilha codificada é literal |
+| `/ping%zz` `/ping%2` `/ping%` | 404 | percentual inválido não decodifica |
+| `/ping#f` | 200 | o fragmento cru é descartado |
+
+**As duas correções.** `/./ping` responde **404**, não 200 — o Salvo descarta os
+segmentos vazios e só eles. E `GET /` responde **405** em qualquer método,
+porque no legado a raiz é rota (`Router::new()` casa o caminho vazio) e não tem
+método; `catcher.go` já registrava isso desde a F9, o roteador não fazia.
+
+**A ordem importa: decodificar DEPOIS de partir.** Em Go, `r.URL.Path` já vem
+decodificado, então `%2F` vira barra **antes** do fatiamento e `/ping%2F`
+colapsa para `/ping`. O porte roteia por `r.URL.EscapedPath()` e decodifica
+segmento a segmento, que é a ordem do Salvo. O efeito colateral é de segurança,
+e é o lado bom: nenhuma forma codificada alcança rota que a forma literal não
+alcançaria.
+
+**Duas linhas o porte não reproduz** — `/ping%zz` (o `net/http` responde 400
+antes de qualquer manipulador) e `/ping#f` (indistinguível de `/ping%23f` depois
+da análise de URL do Go). São **D-24**, e nenhuma é alcançável por cliente
+conforme.
 
 ---
 

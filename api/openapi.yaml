@@ -9,7 +9,14 @@ openapi: 3.1.0
 #
 # Tudo o que depende de chave de configuração está marcado com `x-chave` e o
 # nome da variável de ambiente. COM TODAS AS CHAVES NO PADRÃO, apenas /ping e
-# /pdf existem — o resto devolve 404.
+# /pdf existem — o resto devolve 404, com uma exceção: a RAIZ (`/`, `//`, `///`)
+# devolve 405, porque no serviço original ela é rota e não tem método.
+#
+# COMPARAÇÃO DE CAMINHO (medida, ver docs/ESPECIFICACAO.md §1.5.1): o caminho é
+# partido em `/`, os segmentos VAZIOS são descartados, e cada segmento restante
+# é decodificado. Então `/ping/`, `//ping` e `/pi%6Eg` chegam a `/ping`, mas
+# `/./ping`, `/ping%20` e `/ping%2F` NÃO chegam — `.` é um segmento comum, e uma
+# barra vinda de `%2F` não vira separador.
 
 info:
   title: Serviço de recorte de diários oficiais

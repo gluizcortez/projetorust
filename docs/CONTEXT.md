@@ -1342,6 +1342,13 @@ todos os casos — corpo, tipo e negociação errados de uma vez.
 devolveria 404 para as cinco primeiras. **Sem essa descoberta, seis formas que
 hoje funcionam passariam a falhar.**
 
+> ⚠ **CORRIGIDO DEPOIS.** Deste parágrafo, a sonda da F9 mediu **`/ping/`**. As
+> outras quatro formas foram inferidas da leitura do Salvo e escritas aqui como
+> se tivessem sido medidas — e **`/./ping` estava errada: responde 404**. A
+> segunda rodada de medição, no fim deste documento, mediu 45 casos e corrigiu
+> 11 divergências. O parágrafo fica como está por ser o registro do que a F9
+> concluiu; a conclusão certa está em "Segunda rodada de medição do caminho".
+
 **3. `GET /pdf` sem chave devolve 405, não 401.** O método perde antes da
 autenticação — o hoop nem roda.
 
@@ -2025,3 +2032,112 @@ grandes) e semeia os perfis que casam com `exemplos/diario-de-exemplo.pdf`.
 O que foi verificado é o binário rodando direto contra PostgreSQL local, que
 exercita o mesmo código. O compose é a mesma configuração declarada de outra
 forma, mas isso não é o mesmo que tê-lo visto subir.
+
+---
+
+## Segunda rodada de medição do caminho — depois do enxugamento
+
+**Motivada por um relato de campo, não por um teste.** Um `curl` disparado com
+espaço sobrando na URL virou `GET /ping%20` e recebeu 404. O log do serviço
+mostrava a pista inteira: `"rota":"/ping "`, com espaço ao final.
+
+### O primeiro achado: o 404 estava certo
+
+O legado também responde 404 a `/ping%20`. O relato não era defeito — era um
+espaço a mais na linha de comando. Mas a pergunta expôs que
+`normalizarCaminho` **afirmava ter medido o que não tinha**: o comentário dizia
+"MEDIDO por `tools/sonda-http`" e listava seis formas equivalentes, das quais a
+sonda da F9 havia medido **duas**. As outras vieram de ler o Salvo.
+
+É a mesma causa dos dois defeitos da F12, em outra roupa: **inferência escrita
+como medição**. A resposta foi a mesma: medir.
+
+### O que foi medido
+
+`tools/sonda-http --bin sonda-caminho` — binário novo no mesmo *crate* da sonda
+da F9. Sobe um servidor Salvo de verdade e escreve a linha de requisição **byte
+a byte num socket**, sem cliente HTTP no meio: qualquer cliente que passe por
+`Url::parse` normalizaria a URL antes de ela chegar ao servidor, e é justamente
+a forma crua que interessa. 45 casos — 40 com GET, 5 com POST.
+
+A regra medida, em uma frase:
+
+> parta em `/`, descarte os segmentos **vazios**, decodifique **cada segmento**
+> que sobrou, e junte de volta com `/`.
+
+### As três correções
+
+1. **`/./ping` responde 404, não 200.** O Salvo descarta os segmentos vazios e
+   só eles; `.` e `..` são segmentos comuns. A implementação anterior descartava
+   `.` junto com os vazios.
+
+2. **`GET /` responde 405, não 404** — em qualquer método, e em qualquer forma
+   que colapse para zero segmentos (`/`, `//`, `///`). No legado a raiz é rota
+   de verdade: `Router::new()` casa o caminho vazio e não tem método.
+   `catcher.go` **já registrava isso desde a F9**; o roteador nunca fez. Duas
+   partes do mesmo porte discordavam e nenhum teste as confrontava.
+
+3. **A ordem da decodificação.** O porte roteava por `r.URL.Path`, que em Go já
+   vem **decodificado** — então `%2F` virava barra antes do fatiamento e
+   `/ping%2F` colapsava para `/ping`, 200 onde o legado dá 404. O roteamento
+   passou a ser sobre `r.URL.EscapedPath()`, decodificando **segmento a
+   segmento**, que é a ordem do Salvo.
+
+A terceira é a de fundo: as outras duas são casos, esta é a regra. O efeito
+colateral é de segurança e é o lado bom — nenhuma forma codificada alcança rota
+que a forma literal não alcançaria.
+
+### A ordem foi a certa
+
+O teste novo foi escrito contra a tabela medida e rodado **antes** da correção:
+acusou **14 divergências** no roteador então em produção — 11 consertáveis e 3
+não. Depois da correção, as 11 zeraram. Estender a sonda ao fragmento revelou
+mais 2, também não consertáveis, que entraram na mesma D-24.
+
+### O que não tem conserto proporcional — D-24
+
+| Caso | Legado | Porte |
+|---|---|---|
+| `/ping%` `/ping%2` `/ping%zz` | 404 + catcher | **400** do `net/http` |
+| `/ping#f` | 200 `pong` | **404** |
+| `/pdf#x` | 405 | **404** |
+
+Percentual inválido: `url.ParseRequestURI` recusa e o `net/http` responde 400
+**antes de qualquer manipulador** — nenhum middleware vê a requisição.
+Fragmento cru: MEDIDO, `EscapedPath()` devolve `/ping%23f` tanto para `/ping#f`
+quanto para `/ping%23f`, que no legado respondem 200 e 404 — são
+indistinguíveis depois da análise de URL do Go.
+
+Nenhuma é alcançável por cliente conforme: pela RFC 3986 §3.5 o fragmento não é
+enviado ao servidor. Nenhuma perde função, e as duas de fragmento deixam o porte
+**mais restritivo** que o legado. Recomendação registrada: **aceitar**.
+
+Ficaram **assertadas** em `divergenciasConhecidas`, não apenas anotadas: se uma
+versão futura do Go responder outra coisa — inclusive a coisa certa —, o teste
+falha e diz o que fazer.
+
+### A sonda saiu do repositório de novo
+
+Mesmo tratamento que o oráculo da F12 recebeu no enxugamento: a medição fica
+congelada em `caminho_test.go`, e o aparato é recuperável do histórico.
+
+```
+git show <sha>:tools/sonda-http/src/bin/sonda-caminho.rs
+```
+
+### Duas linhas de teste antigas estavam erradas
+
+`TestRoteamentoMedido` afirmava `/./ping` → 200 e `/` → 404. Corrigidas. Elas são
+a razão de a divergência ter sobrevivido a três fases de teste: o teste
+codificava a mesma inferência que o código.
+
+### Medições
+
+| O que | Valor |
+|---|---|
+| Casos medidos contra o Salvo | 45 (40 GET, 5 POST) |
+| Divergências na primeira passada | 14 — 11 corrigidas, 3 aceitas |
+| Divergências que a sonda estendida achou depois | 2 de fragmento, aceitas |
+| Diferença só de corpo | 1 (`/ping\tx`: 400 nos dois, corpo diferente) |
+| Linhas em `divergenciasConhecidas` | 6 |
+| Testes do pacote `httpapi` | todos passam |
