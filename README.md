@@ -237,6 +237,7 @@ a conferir.**
 
 | Caminho | Conteúdo |
 |---|---|
+| `docs/kickoff.html` | **Comece por aqui.** Documento de apresentação para o time: o que mudou, os pacotes, como rodar, o banco, as chaves e o deploy |
 | `docs/roadmap-migracao-rust-go.html` | Documento de arquitetura: análise do legado, armadilhas de paridade, arquitetura alvo e as 14 fases com seus prompts |
 | `docs/ESPECIFICACAO.md` | Especificação normativa do comportamento observável |
 | `docs/INVARIANTES.md` | As 23 invariantes de paridade, com casos positivos e negativos |

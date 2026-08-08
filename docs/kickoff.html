@@ -1,0 +1,1519 @@
+<title>Recorte de Diários Oficiais — a versão em Go</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Tokens. O bloco :root é a paleta CLARA completa; os dois
+   blocos seguintes só redefinem tokens, nunca componentes.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --ground:      #F5F7FA;
+  --surface:     #FFFFFF;
+  --surface-2:   #EDF1F7;
+  --linha:       #D8DEE9;
+  --linha-forte: #B9C3D4;
+
+  --ink:    #121826;
+  --ink-2:  #4B5468;
+  --ink-3:  #6E7789;
+
+  --accent:     #2C4E8F;
+  --accent-sob: #E7EDF9;
+  --ocre:       #8F5C12;
+  --ocre-sob:   #F7EEDC;
+  --ok:         #3B6630;
+  --ok-sob:     #E7F0E3;
+  --alerta:     #9A3624;
+  --alerta-sob: #FAEAE6;
+
+  --sombra: 0 1px 2px rgba(18, 24, 38, .06), 0 4px 14px rgba(18, 24, 38, .05);
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Charter, Georgia, 'Times New Roman', serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0D1119;
+    --surface:     #151B25;
+    --surface-2:   #1C232F;
+    --linha:       #2A3341;
+    --linha-forte: #3C4757;
+
+    --ink:    #E6EAF2;
+    --ink-2:  #A2ACBF;
+    --ink-3:  #7E8899;
+
+    --accent:     #86A9EC;
+    --accent-sob: #17233A;
+    --ocre:       #D9A155;
+    --ocre-sob:   #2A2114;
+    --ok:         #85B36F;
+    --ok-sob:     #172415;
+    --alerta:     #E4897A;
+    --alerta-sob: #2B1714;
+
+    --sombra: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #0D1119;
+  --surface:     #151B25;
+  --surface-2:   #1C232F;
+  --linha:       #2A3341;
+  --linha-forte: #3C4757;
+
+  --ink:    #E6EAF2;
+  --ink-2:  #A2ACBF;
+  --ink-3:  #7E8899;
+
+  --accent:     #86A9EC;
+  --accent-sob: #17233A;
+  --ocre:       #D9A155;
+  --ocre-sob:   #2A2114;
+  --ok:         #85B36F;
+  --ok-sob:     #172415;
+  --alerta:     #E4897A;
+  --alerta-sob: #2B1714;
+
+  --sombra: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+}
+
+/* ───────────────────────────── base ───────────────────────── */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-underline-offset: .18em; text-decoration-thickness: 1px; }
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: .875em;
+  background: var(--surface-2);
+  border: 1px solid var(--linha);
+  border-radius: 4px;
+  padding: .1em .34em;
+  word-break: break-word;
+}
+
+pre {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.6;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--linha);
+  border-left: 3px solid var(--linha-forte);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 0;
+  overflow-x: auto;
+}
+pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+/* ─────────────────────────── estrutura ────────────────────── */
+.folha {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+
+.corpo { min-width: 0; display: flex; flex-direction: column; gap: 56px; }
+
+/* ─────────────────────────── cabeçalho ────────────────────── */
+.capa {
+  grid-column: 1 / -1;
+  padding: 64px 0 40px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.selo {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.selo b { color: var(--accent); font-weight: 600; }
+
+.capa h1 {
+  font-family: var(--serif);
+  font-size: clamp(34px, 5.2vw, 56px);
+  line-height: 1.08;
+  letter-spacing: -.015em;
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+  max-width: 20ch;
+}
+
+.linha-fina {
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 62ch;
+  margin: 0;
+  text-wrap: pretty;
+}
+
+/* ──────────────────────────── sumário ─────────────────────── */
+.sumario {
+  position: sticky;
+  top: 24px;
+  font-size: 14px;
+  border-left: 1px solid var(--linha);
+  padding-left: 18px;
+}
+.sumario h2 {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 14px;
+  font-weight: 600;
+}
+.sumario ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; counter-reset: nav; }
+.sumario a {
+  display: flex;
+  gap: 10px;
+  padding: 5px 8px 5px 0;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-radius: 4px;
+  line-height: 1.35;
+  counter-increment: nav;
+}
+.sumario a::before {
+  content: counter(nav);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  flex: 0 0 16px;
+  text-align: right;
+  padding-top: 2px;
+}
+.sumario a:hover { color: var(--ink); }
+.sumario a.ativo { color: var(--accent); font-weight: 600; }
+.sumario a.ativo::before { color: var(--accent); }
+
+/* ─────────────────────────── seções ───────────────────────── */
+section { scroll-margin-top: 24px; }
+
+.rotulo {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 10px;
+}
+
+h2.titulo {
+  font-family: var(--serif);
+  font-size: clamp(26px, 3.4vw, 34px);
+  line-height: 1.15;
+  letter-spacing: -.01em;
+  font-weight: 600;
+  margin: 0 0 20px;
+  text-wrap: balance;
+}
+
+h3 {
+  font-family: var(--sans);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -.005em;
+  margin: 34px 0 12px;
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+h4 {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  margin: 26px 0 10px;
+}
+
+p { margin: 0 0 14px; max-width: 70ch; text-wrap: pretty; }
+section > p:last-child, .bloco > p:last-child { margin-bottom: 0; }
+
+ul, ol.lista { max-width: 70ch; padding-left: 22px; margin: 0 0 14px; }
+li { margin-bottom: 7px; }
+li::marker { color: var(--ink-3); }
+
+strong { font-weight: 650; }
+
+/* ──────────────────────────── tabelas ─────────────────────── */
+.rolagem { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--linha); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 520px; }
+th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--linha-forte);
+  white-space: nowrap;
+  background: var(--surface-2);
+}
+td { padding: 11px 14px; border-bottom: 1px solid var(--linha); vertical-align: top; line-height: 1.5; }
+tr:last-child td { border-bottom: 0; }
+td code { font-size: 12.5px; white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+/* ──────────────────────────── avisos ──────────────────────── */
+.bloco {
+  border: 1px solid var(--linha);
+  border-left: 3px solid var(--linha-forte);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin: 0 0 18px;
+  background: var(--surface);
+  max-width: 76ch;
+}
+.bloco .cabeca {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--ink-2);
+}
+.bloco p { margin-bottom: 10px; font-size: 15px; }
+.bloco > :last-child { margin-bottom: 0; }
+
+.bloco.regra   { border-left-color: var(--accent); background: var(--accent-sob); }
+.bloco.regra .cabeca { color: var(--accent); }
+.bloco.cuidado { border-left-color: var(--ocre);  background: var(--ocre-sob); }
+.bloco.cuidado .cabeca { color: var(--ocre); }
+.bloco.parar   { border-left-color: var(--alerta); background: var(--alerta-sob); }
+.bloco.parar .cabeca { color: var(--alerta); }
+
+/* ───────────────────────────── pílulas ────────────────────── */
+.pilula {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 2.5px 8px;
+  border-radius: 100px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.p-off  { background: var(--surface-2); color: var(--ink-3);  border-color: var(--linha); }
+.p-add  { background: var(--ok-sob);    color: var(--ok);     border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+.p-mud  { background: var(--ocre-sob);  color: var(--ocre);   border-color: color-mix(in srgb, var(--ocre) 30%, transparent); }
+.p-sem  { background: var(--alerta-sob);color: var(--alerta); border-color: color-mix(in srgb, var(--alerta) 30%, transparent); }
+
+/* ───────────────────── máquina de estados ─────────────────── */
+.estados {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 4px 0;
+}
+.estado {
+  border: 1px solid var(--linha);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 8px 12px;
+  min-width: 86px;
+  box-shadow: var(--sombra);
+}
+.estado .n { font-family: var(--mono); font-size: 17px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.estado .q { font-size: 11.5px; color: var(--ink-2); line-height: 1.3; margin-top: 2px; }
+.estado.fim  { border-color: color-mix(in srgb, var(--ok) 45%, var(--linha)); }
+.estado.fim .n  { color: var(--ok); }
+.estado.erro { border-color: color-mix(in srgb, var(--alerta) 45%, var(--linha)); }
+.estado.erro .n { color: var(--alerta); }
+.estado.morto { opacity: .5; border-style: dashed; }
+.seta { align-self: center; color: var(--ink-3); font-size: 13px; }
+
+/* ──────────────────────── grade de pacotes ────────────────── */
+.pacotes { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.pacote {
+  border: 1px solid var(--linha);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pacote .nome {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.pacote .linhas { font-size: 10.5px; color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+.pacote .oque { font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+
+/* ───────────────────────────── passos ─────────────────────── */
+.passos { counter-reset: passo; list-style: none; padding: 0; margin: 0 0 18px; display: flex; flex-direction: column; gap: 20px; max-width: 76ch; }
+.passos > li { counter-increment: passo; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; margin: 0; }
+.passos > li::before {
+  content: counter(passo);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-sob);
+  border-radius: 100px;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: 1px;
+}
+.passos .conteudo { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.passos p { margin: 0; }
+
+hr.divisor { border: 0; border-top: 1px solid var(--linha); margin: 34px 0; }
+
+.rodape {
+  grid-column: 1 / -1;
+  border-top: 2px solid var(--ink);
+  padding-top: 22px;
+  margin-top: 24px;
+  font-size: 13.5px;
+  color: var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+}
+.rodape code { font-size: 12px; }
+
+/* ──────────────────────────── responsivo ──────────────────── */
+@media (max-width: 1080px) {
+  .folha { grid-template-columns: minmax(0, 1fr); gap: 34px; padding: 0 20px 72px; }
+  .sumario {
+    position: static;
+    border-left: 0;
+    border: 1px solid var(--linha);
+    border-radius: 8px;
+    padding: 16px 18px;
+    background: var(--surface);
+  }
+  .sumario ol { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0 16px; }
+  .capa { padding-top: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="folha">
+
+  <header class="capa">
+    <div class="selo">
+      <span>Kickoff técnico</span>
+      <span><b>Rust → Go</b></span>
+      <span>Serviço de recorte de diários oficiais</span>
+      <span>Agosto de 2026</span>
+    </div>
+    <h1>A mesma coisa, escrita de novo — e provada linha a linha</h1>
+    <p class="linha-fina">
+      O serviço que ingere Diários Oficiais em PDF e gera recortes por perfil de
+      cliente foi reescrito de Rust para Go. Ele faz <strong>exatamente</strong> o
+      que fazia antes: mesmas rotas, mesmos textos de erro, mesmos efeitos no
+      banco — inclusive os defeitos. Tudo o que melhorou está atrás de uma chave
+      de configuração que <strong>nasce desligada</strong>. Este documento é o
+      mapa para você entender, rodar e operar essa versão.
+    </p>
+  </header>
+
+  <nav class="sumario" aria-label="Sumário">
+    <h2>Neste documento</h2>
+    <ol>
+      <li><a href="#resumo">O que foi feito</a></li>
+      <li><a href="#regra">A regra que explica o código</a></li>
+      <li><a href="#pacotes">Os pacotes</a></li>
+      <li><a href="#rodar">Rodando localmente</a></li>
+      <li><a href="#fluxo">O que acontece num upload</a></li>
+      <li><a href="#tabelas">O banco, e como trocar nomes</a></li>
+      <li><a href="#chaves">As chaves de melhoria</a></li>
+      <li><a href="#deploy">Deploy e Docker</a></li>
+      <li><a href="#armadilhas">Armadilhas conhecidas</a></li>
+      <li><a href="#pendencias">O que ainda falta</a></li>
+    </ol>
+  </nav>
+
+  <main class="corpo">
+
+    <!-- ══════════════════════════ 1 ══════════════════════════ -->
+    <section id="resumo">
+      <span class="rotulo">Seção 1</span>
+      <h2 class="titulo">O que foi feito</h2>
+
+      <p>
+        O serviço original tinha <strong>730 linhas de Rust num único arquivo</strong>
+        — HTTP, banco, extração de PDF, indexação e busca, tudo junto. A reescrita
+        entregou <strong>12.079 linhas de Go em 15 pacotes</strong>, com as
+        responsabilidades separadas e as regras de negócio isoladas da
+        infraestrutura.
+      </p>
+
+      <p>
+        O trabalho foi organizado em 12 fases. As mais relevantes para entender o
+        resultado:
+      </p>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Fase</th><th>O que entregou</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>F0</strong></td>
+              <td>Especificação executável: o comportamento do Rust documentado linha a linha, mais 23 <em>invariantes de paridade</em> — as regras sutis que um porte ingênuo quebraria sem perceber.</td>
+            </tr>
+            <tr>
+              <td><strong>F3–F8</strong></td>
+              <td>Domínio, extração de PDF (MuPDF), normalização de texto, índice de busca por frase e o laço de recorte. Cada camada comparada contra a saída real do Rust, não contra o que achávamos que ele fazia.</td>
+            </tr>
+            <tr>
+              <td><strong>F9</strong></td>
+              <td>Contrato HTTP <em>medido</em> contra o framework original: os textos exatos, os códigos de status, e até a página HTML de 404 reproduzida byte a byte.</td>
+            </tr>
+            <tr>
+              <td><strong>F11</strong></td>
+              <td>As dez melhorias técnicas, todas atrás de chave desligada. Ver <a href="#chaves">seção 7</a>.</td>
+            </tr>
+            <tr>
+              <td><strong>F12</strong></td>
+              <td>Verificação de paridade. Encontrou <strong>dois defeitos graves</strong> que sete fases de teste não pegaram — e é a razão de a fase existir.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Os dois defeitos que a verificação encontrou</h3>
+
+      <p>
+        Vale conhecê-los, porque explicam por que o projeto insiste em medir em
+        vez de raciocinar:
+      </p>
+
+      <ul>
+        <li>
+          <strong>A normalização de texto nunca era aplicada em produção.</strong>
+          A função que remove acentos e junta palavras quebradas por hífen existia,
+          tinha 1.000.000 de casos de teste — e não estava ligada no caminho real.
+          Cinco dos 28 documentos de referência produziam recortes errados.
+        </li>
+        <li>
+          <strong>Termos longos não deixavam buraco na numeração de posições.</strong>
+          O motor de busca original descarta palavras com 40 bytes ou mais, mas
+          <em>não renumera</em> as posições. Sem reproduzir esse buraco, a busca por
+          frase encontrava ocorrências que o serviço atual nunca encontrou.
+        </li>
+      </ul>
+
+      <p>
+        Ambos passaram por sete fases com a suíte inteira verde. A causa era a
+        mesma: cada camada era testada contra a saída do Rust <em>daquela camada</em>,
+        e a costura entre elas ficava sem cobertura.
+      </p>
+
+      <h3>Validado sobre um diário de verdade</h3>
+
+      <p>
+        Além dos documentos sintéticos, o serviço foi exercitado sobre um
+        <strong>Diário Oficial da União real</strong> — Seção 1, nº 126 de 8 de
+        julho de 2026 —, que está no repositório em
+        <code>exemplos/dou-secao1-2026-07-08.pdf</code>. Oito expressões, cinco
+        casam e três não, e cada resultado prova uma propriedade diferente. Está
+        detalhado no <code>README.md</code>.
+      </p>
+    </section>
+
+    <!-- ══════════════════════════ 2 ══════════════════════════ -->
+    <section id="regra">
+      <span class="rotulo">Seção 2</span>
+      <h2 class="titulo">A regra que explica o código</h2>
+
+      <div class="bloco regra">
+        <div class="cabeca">A regra dura do projeto</div>
+        <p>
+          <strong>Paridade comportamental total.</strong> Nenhuma funcionalidade
+          pode ser alterada ou removida. Rotas, textos de erro (o texto exato, a
+          ordem, o separador), códigos de status, efeitos no banco e transições de
+          estado precisam ser indistinguíveis do serviço original.
+        </p>
+        <p>
+          <strong>O código Rust é o oráculo.</strong> Onde a documentação divergir
+          dele, o Rust vence — <em>inclusive quando o comportamento parece um
+          defeito</em>. Defeitos preservados são registrados como tais, nunca
+          corrigidos em silêncio.
+        </p>
+        <p>
+          <strong>Toda melhoria nasce desligada.</strong> Cada evolução fica atrás
+          de uma chave cujo padrão reproduz o legado exatamente. Nenhuma chave liga
+          sozinha. Sem exceção.
+        </p>
+      </div>
+
+      <p>
+        Isso responde a maior parte das perguntas de tipo “por que está assim?”.
+        Quando você encontrar um trecho de código que parece errado, é provável que
+        ele esteja reproduzindo um comportamento do original de propósito — e o
+        comentário acima dele vai dizer isso, com a linha do Rust como referência.
+      </p>
+
+      <h3>Três exemplos de defeito preservado</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>O comportamento</th><th>Por que parece errado</th><th>Por que ficou</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Expressão cadastrada <strong>com acento nunca casa</strong> com nada</td>
+              <td>O texto do PDF perde os acentos na indexação, mas a expressão do cliente não passa pela mesma normalização</td>
+              <td>Corrigir mudaria os recortes que os clientes recebem hoje</td>
+            </tr>
+            <tr>
+              <td><code>SERVIDOR_PORTA=abc</code> sobe na porta <strong>6001</strong>, sem reclamar</td>
+              <td>Configuração inválida deveria falhar no arranque</td>
+              <td>O original engole o erro. <code>CONFIG_ESTRITA=true</code> transforma em falha, se você quiser</td>
+            </tr>
+            <tr>
+              <td>Data <code>2024-3-15</code> é <strong>aceita</strong></td>
+              <td>O formato documentado é <code>%Y-%m-%d</code> com dois dígitos</td>
+              <td>A biblioteca de datas do Rust é permissiva; a do Go não é. Reproduzir exigiu um analisador próprio</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Convenções de código que valem conhecer</h3>
+
+      <ul>
+        <li><strong>Sem estado global.</strong> Toda dependência entra por construtor, montada em <code>src/app</code>.</li>
+        <li><strong><code>context.Context</code> é o primeiro parâmetro</strong> de toda função que faz I/O.</li>
+        <li><strong>Erros são valores</strong>, embrulhados com <code>%w</code>. Nada de <code>panic</code> no caminho normal.</li>
+        <li><strong>Comentários em português</strong>, explicando o <em>porquê</em> — normalmente citando a linha do Rust que originou a decisão.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════════════ 3 ══════════════════════════ -->
+    <section id="pacotes">
+      <span class="rotulo">Seção 3</span>
+      <h2 class="titulo">Os pacotes</h2>
+
+      <p>
+        Tudo vive em <code>src/</code>, um nível de pacotes. A dependência aponta
+        sempre para dentro: adaptadores conhecem o domínio, o domínio não conhece
+        ninguém.
+      </p>
+
+      <h4>O núcleo</h4>
+      <div class="pacotes">
+        <div class="pacote">
+          <div class="nome"><span>domain</span><span class="linhas">1.012 ln</span></div>
+          <div class="oque">Os tipos e as regras do negócio: importação, recorte, perfil, máquina de estados, textos de crítica. Não importa nada de infraestrutura.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>usecase</span><span class="linhas">1.089 ln</span></div>
+          <div class="oque">Os fluxos: <em>ingerir</em> (validar e registrar), <em>processar</em> (extrair, indexar, recortar, gravar) e <em>varrer</em> importações presas.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>app</span><span class="linhas">745 ln</span></div>
+          <div class="oque">A raiz de composição. Monta o grafo inteiro de dependências, explicitamente, e conduz o ciclo de vida do processo. É por aqui que se entende o sistema todo.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>main</span><span class="linhas">137 ln</span></div>
+          <div class="oque">Ponto de entrada. Lê as flags <code>-versao</code> e <code>-healthcheck</code>, carrega a configuração e entrega para <code>app</code>.</div>
+        </div>
+      </div>
+
+      <h4>Entrada e saída</h4>
+      <div class="pacotes">
+        <div class="pacote">
+          <div class="nome"><span>httpapi</span><span class="linhas">1.098 ln</span></div>
+          <div class="oque">Rotas, análise do <code>multipart</code> e a página de erro do framework original reproduzida byte a byte. O roteamento é feito à mão porque o <code>ServeMux</code> do Go compara caminhos de outro jeito.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>middleware</span><span class="linhas">485 ln</span></div>
+          <div class="oque">Identificador de requisição, registro, recuperação de pânico, limite de corpo, autenticação e limite de taxa.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>resposta</span><span class="linhas">167 ln</span></div>
+          <div class="oque">Escreve o corpo das respostas. Duas implementações: texto puro (o legado) e <code>problem+json</code>, escolhidas por chave.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>postgres</span><span class="linhas">919 ln</span></div>
+          <div class="oque">Repositórios e as consultas SQL, embutidas no binário a partir de <code>queries/</code>. Ver a <a href="#tabelas">seção 6</a>.</div>
+        </div>
+      </div>
+
+      <h4>Processamento do documento</h4>
+      <div class="pacotes">
+        <div class="pacote">
+          <div class="nome"><span>pdftext</span><span class="linhas">2.679 ln</span></div>
+          <div class="oque">Extração via MuPDF e a normalização: junção de palavras quebradas por hífen e remoção de acentos. O maior pacote, e o mais sensível a paridade.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>searchidx</span><span class="linhas">2.166 ln</span></div>
+          <div class="oque">Índice posicional em memória e busca por frase. Reproduz o comportamento do motor original, inclusive o descarte de termos com 40 bytes ou mais.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>worker</span><span class="linhas">300 ln</span></div>
+          <div class="oque">Executa as importações em segundo plano, com teto opcional de concorrência e drenagem no encerramento.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>periodico</span><span class="linhas">121 ln</span></div>
+          <div class="oque">Roda uma tarefa em intervalos regulares. Existe para a varredura de importações presas, e nada mais.</div>
+        </div>
+      </div>
+
+      <h4>Apoio</h4>
+      <div class="pacotes">
+        <div class="pacote">
+          <div class="nome"><span>config</span><span class="linhas">638 ln</span></div>
+          <div class="oque">Lê e valida as variáveis de ambiente. Segredos usam um tipo que se redige sozinho em log e em mensagem de erro.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>observability</span><span class="linhas">387 ln</span></div>
+          <div class="oque">Registro estruturado, métricas Prometheus e rastros OpenTelemetry.</div>
+        </div>
+        <div class="pacote">
+          <div class="nome"><span>shutdown</span><span class="linhas">136 ln</span></div>
+          <div class="oque">Encerramento ordenado nos mesmos sinais que o original escutava.</div>
+        </div>
+      </div>
+
+      <div class="bloco">
+        <div class="cabeca">Por onde começar a ler</div>
+        <p>
+          <code>src/app/app.go</code>. Ele monta tudo de cima para baixo, em ordem
+          numerada, e cada etapa diz o que está construindo e por quê. Depois
+          <code>src/usecase/processar.go</code>, que é o coração do serviço.
+        </p>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ 4 ══════════════════════════ -->
+    <section id="rodar">
+      <span class="rotulo">Seção 4</span>
+      <h2 class="titulo">Rodando localmente</h2>
+
+      <p>
+        Nada precisa ser definido antes — nem chave de API, nem banco, nem
+        endereço. Os padrões do código já sobem um serviço funcional.
+      </p>
+
+      <h3>Com Docker (o caminho mais curto)</h3>
+
+      <pre><code>make subir           # ou: docker compose up --build
+curl localhost:6001/ping</code></pre>
+
+      <p>
+        Sobe o PostgreSQL, cria o esquema, semeia os perfis de exemplo e sobe o
+        serviço em <code>http://localhost:6001</code>. Para derrubar preservando os
+        dados: <code>make descer</code>.
+      </p>
+
+      <h3>Sem Docker</h3>
+
+      <p>
+        Precisa de Go 1.24 e de um PostgreSQL alcançável em
+        <code>postgres://recorte:recorte@localhost:5432/recorte</code>, com os três
+        arquivos de <code>db/init/</code> aplicados. Depois:
+      </p>
+
+      <pre><code>go run ./src/main</code></pre>
+
+      <p>Com outro banco, defina <code>DATABASE_URL</code>.</p>
+
+      <div class="bloco cuidado">
+        <div class="cabeca">Cgo é obrigatório</div>
+        <p>
+          A extração de PDF usa MuPDF, que é uma biblioteca C. Com
+          <code>CGO_ENABLED=0</code> o binário <strong>compila normalmente</strong>
+          e entra em pânico no arranque, procurando um <code>libmupdf.so</code> que
+          não existe. O <code>Makefile</code> e o <code>Dockerfile</code> já fixam
+          <code>CGO_ENABLED=1</code>; se você compilar à mão, não esqueça.
+        </p>
+      </div>
+
+      <h3>Enviando um diário</h3>
+
+      <pre><code>curl -X POST http://localhost:6001/pdf \
+  -H "X-API-KEY: 01956cb2-2f85-7440-9767-1a6651c10e0f" \
+  -F "data-caderno=2026-07-08" \
+  -F "data-disponibilizacao=2026-07-08" \
+  -F "id-usuario=44521" \
+  -F "id-caderno=1" \
+  -F "pdf=@exemplos/dou-secao1-2026-07-08.pdf"</code></pre>
+
+      <p>
+        A resposta é <code>PDF carregado com sucesso</code>. Note que o
+        processamento é <strong>assíncrono</strong>: o 200 confirma o
+        <em>registro</em>, não o resultado. Para ver o que saiu, consulte o banco
+        depois de um ou dois segundos:
+      </p>
+
+      <pre><code>SELECT id_importacao, status, total_recortes, nome_original_pdf
+FROM recorte.tb_importacao
+ORDER BY id_importacao DESC LIMIT 5;</code></pre>
+
+      <div class="bloco cuidado">
+        <div class="cabeca"><code>id-caderno</code> não é decorativo</div>
+        <p>
+          É o campo que liga a submissão aos perfis de cliente. Se ele não casar com
+          nenhum <code>tb_perfil_caderno</code> habilitado, o serviço responde 200,
+          termina com status 5 e produz <strong>zero recortes</strong> — parece que
+          funcionou, mas não há nada para ver. Nos dados de exemplo, use
+          <code>id-caderno=1</code>.
+        </p>
+      </div>
+
+      <h3>A chave de API</h3>
+
+      <p>
+        <code>01956cb2-2f85-7440-9767-1a6651c10e0f</code> está em claro no
+        repositório, no <code>docker-compose.yml</code> e como padrão em
+        <code>config.APIKeyPadrao</code>. É o mesmo valor que o serviço original
+        trazia como constante no código-fonte — quem tinha o binário conseguia
+        extraí-la com <code>strings</code>. Não é regressão, mas também não é
+        segredo. <strong>Em produção, defina <code>API_KEY</code> no ambiente:</strong>
+        a variável sempre vence o padrão.
+      </p>
+    </section>
+
+    <!-- ══════════════════════════ 5 ══════════════════════════ -->
+    <section id="fluxo">
+      <span class="rotulo">Seção 5</span>
+      <h2 class="titulo">O que acontece num upload</h2>
+
+      <ol class="passos">
+        <li><div class="conteudo">
+          <p><strong>A requisição chega.</strong> O PDF vem na própria requisição, na parte <code>pdf</code> do <code>multipart</code>. O serviço não busca o arquivo em disco, fila ou storage — não existe outro caminho de entrada.</p>
+        </div></li>
+        <li><div class="conteudo">
+          <p><strong>Validação.</strong> Cinco campos são conferidos numa ordem fixa. Cada falha vira uma crítica, e todas são unidas por vírgula <em>sem espaço</em> num 400. A ordem e o separador são contrato observável.</p>
+        </div></li>
+        <li><div class="conteudo">
+          <p><strong>Registro.</strong> Um <code>INSERT</code> em <code>tb_importacao</code> com status 0, guardando o nome do arquivo e o SHA-256 do conteúdo. A resposta 200 sai aqui.</p>
+        </div></li>
+        <li><div class="conteudo">
+          <p><strong>Processamento em segundo plano.</strong> Extração das páginas via MuPDF, normalização, construção do índice, e então a busca de cada expressão de cada perfil habilitado para aquele caderno.</p>
+        </div></li>
+        <li><div class="conteudo">
+          <p><strong>Gravação.</strong> Cada página encontrada vira uma linha em <code>tb_recorte</code>, mais o <strong>texto integral da página</strong> em <code>tb_recorte_texto</code> — não o trecho que casou, a página inteira.</p>
+        </div></li>
+      </ol>
+
+      <h3>Os estados da importação</h3>
+
+      <div class="estados">
+        <div class="estado"><div class="n">0</div><div class="q">recebida</div></div>
+        <span class="seta">→</span>
+        <div class="estado"><div class="n">1</div><div class="q">selecionada</div></div>
+        <span class="seta">→</span>
+        <div class="estado"><div class="n">2</div><div class="q">indexando</div></div>
+        <span class="seta">→</span>
+        <div class="estado"><div class="n">3</div><div class="q">recortando</div></div>
+        <span class="seta">→</span>
+        <div class="estado fim"><div class="n">5</div><div class="q">finalizada</div></div>
+        <span class="seta">·</span>
+        <div class="estado erro"><div class="n">−1</div><div class="q">erro</div></div>
+        <span class="seta">·</span>
+        <div class="estado morto"><div class="n">4</div><div class="q">nunca usado</div></div>
+      </div>
+
+      <p>
+        <code>5</code> e <code>−1</code> são terminais. O <code>4</code> existe na
+        numeração e <strong>nenhum caminho do código chega nele</strong> — está
+        assim no original e foi preservado.
+      </p>
+
+      <div class="bloco cuidado">
+        <div class="cabeca">O documento não é guardado</div>
+        <p>
+          Depois do processamento, os bytes do PDF são descartados. Sobrevivem
+          apenas o <em>nome</em> do arquivo, o <em>hash</em>, e o texto das páginas
+          que geraram recorte. A consequência: <strong>importação que falha é perda
+          definitiva de trabalho</strong> — não há de onde reprocessar, e a única
+          recuperação é o cliente reenviar. Isso é desenho do original, e está
+          registrado como decisão aberta.
+        </p>
+      </div>
+
+      <h3>As rotas</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Rota</th><th>Auth</th><th>O que faz</th><th>Existe quando</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>GET /ping</code></td>
+              <td>não</td>
+              <td>Responde <code>pong</code>. Não consulta o banco — responde mesmo com o PostgreSQL fora do ar.</td>
+              <td><span class="pilula p-off">sempre</span></td>
+            </tr>
+            <tr>
+              <td><code>POST /pdf</code></td>
+              <td><code>X-API-KEY</code></td>
+              <td>Recebe o diário e registra a importação.</td>
+              <td><span class="pilula p-off">sempre</span></td>
+            </tr>
+            <tr>
+              <td><code>GET /importacao/{id}</code></td>
+              <td><code>X-API-KEY</code></td>
+              <td>Estado da importação em JSON: status, rótulo, datas, total de recortes.</td>
+              <td><span class="pilula p-add">STATUS_ENDPOINT</span></td>
+            </tr>
+            <tr>
+              <td><code>GET /health/live</code><br><code>GET /health/ready</code></td>
+              <td>não</td>
+              <td>Sondas para orquestrador. <em>Ready</em> verifica o banco e a fila.</td>
+              <td><span class="pilula p-add">HEALTH_ENDPOINTS</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ 6 ══════════════════════════ -->
+    <section id="tabelas">
+      <span class="rotulo">Seção 6</span>
+      <h2 class="titulo">O banco, e como trocar nomes</h2>
+
+      <p>
+        O serviço usa <strong>sete tabelas</strong> no esquema <code>recorte</code>.
+        Ele <strong>lê</strong> o cadastro de clientes e perfis, e
+        <strong>escreve</strong> nas três de importação e recorte.
+      </p>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Tabela</th><th>Uso</th><th>Papel</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>tb_cliente</code></td><td><span class="pilula p-off">leitura</span></td><td>Clientes. Só os de <code>status = 'A'</code> geram recorte.</td></tr>
+            <tr><td><code>tb_perfil</code></td><td><span class="pilula p-off">leitura</span></td><td>Perfis de monitoramento, ligados a um cliente.</td></tr>
+            <tr><td><code>tb_perfil_variacao</code></td><td><span class="pilula p-off">leitura</span></td><td>As expressões buscadas. <code>expressao_nm</code> nula é ignorada.</td></tr>
+            <tr><td><code>tb_perfil_caderno</code></td><td><span class="pilula p-off">leitura</span></td><td>Quais cadernos cada perfil acompanha. Só <code>status = 'S'</code> vale.</td></tr>
+            <tr><td><code>tb_importacao</code></td><td><span class="pilula p-mud">escrita</span></td><td>Uma linha por submissão: status, datas, nome do arquivo, hash, total.</td></tr>
+            <tr><td><code>tb_recorte</code></td><td><span class="pilula p-mud">escrita</span></td><td>Uma linha por página encontrada, com o perfil e a expressão que casou.</td></tr>
+            <tr><td><code>tb_recorte_texto</code></td><td><span class="pilula p-mud">escrita</span></td><td>O texto integral da página do recorte.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bloco cuidado">
+        <div class="cabeca">O esquema em <code>db/init/</code> é inferido</div>
+        <p>
+          Ele foi <strong>deduzido a partir das consultas do Rust</strong>, não
+          extraído do banco de produção — que nunca foi disponibilizado. Tipos,
+          restrições, índices e <em>collation</em> reais podem divergir. Serve para
+          rodar localmente; <strong>não aplique em produção</strong>. O arquivo diz
+          isso em letras grandes no cabeçalho.
+        </p>
+      </div>
+
+      <h3>Se as tabelas do legado tiverem outros nomes</h3>
+
+      <p>
+        Este é o caso provável: as tabelas de produção já existem e podem se chamar
+        de outro jeito. <strong>Todo o SQL do serviço está em arquivos
+        <code>.sql</code> separados</strong>, embutidos no binário na compilação.
+        Você troca o nome no arquivo, recompila, e pronto — não há SQL espalhado
+        pelo código Go.
+      </p>
+
+      <h4>Onde mexer, por ordem de importância</h4>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Arquivo</th><th>Tabelas que cita</th><th>O que faz</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>src/postgres/queries/importacao_inserir.sql</code></td><td><code>tb_importacao</code></td><td>Registra a submissão</td></tr>
+            <tr><td><code>src/postgres/queries/importacao_status.sql</code></td><td><code>tb_importacao</code></td><td>Atualiza o status</td></tr>
+            <tr><td><code>src/postgres/queries/importacao_inicio.sql</code></td><td><code>tb_importacao</code></td><td>Carimba <code>data_inicio</code></td></tr>
+            <tr><td><code>src/postgres/queries/importacao_termino.sql</code></td><td><code>tb_importacao</code></td><td>Carimba <code>data_fim</code> e o total</td></tr>
+            <tr><td><code>src/postgres/queries/chaves_pesquisa.sql</code></td><td><code>tb_perfil_variacao</code>, <code>tb_perfil</code>, <code>tb_perfil_caderno</code>, <code>tb_cliente</code>, <code>tb_importacao</code></td><td>Busca as expressões a procurar. <strong>É a consulta que toca mais tabelas</strong></td></tr>
+            <tr><td><code>src/postgres/queries/recorte_inserir.sql</code></td><td><code>tb_recorte</code></td><td>Grava um recorte</td></tr>
+            <tr><td><code>src/postgres/queries/recorte_texto_inserir.sql</code></td><td><code>tb_recorte_texto</code></td><td>Grava o texto da página</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Mais cinco arquivos em <code>src/postgres/queries/f11/</code>, que só são
+        usados pelas chaves de melhoria (<code>STATUS_ENDPOINT</code>,
+        <code>GRAVACAO_EM_LOTE</code>, <code>IDEMPOTENCIA_POR_HASH</code>,
+        <code>VARREDURA_ORFAS</code>). Se essas chaves ficarem desligadas, eles não
+        rodam — mas ajuste-os junto, para não deixar uma armadilha para quem ligar
+        depois.
+      </p>
+
+      <h4>Se o esquema também mudar de nome</h4>
+
+      <p>
+        O esquema <code>recorte</code> aparece qualificado em todas as consultas
+        (<code>recorte.tb_importacao</code>). Duas saídas:
+      </p>
+
+      <ul>
+        <li><strong>Trocar nos arquivos</strong>, como acima. Explícito e sem surpresa.</li>
+        <li><strong>Usar <code>search_path</code></strong> na string de conexão e remover a qualificação. Menos edição, porém mais frágil: depende de configuração fora do código.</li>
+      </ul>
+
+      <div class="bloco parar">
+        <div class="cabeca">Antes de editar, leia o cabeçalho do arquivo</div>
+        <p>
+          Cada <code>.sql</code> começa com um aviso de que é
+          <strong>transcrição literal</strong> do Rust, com a linha de origem. A
+          cláusula <code>ORDER BY</code> de <code>chaves_pesquisa.sql</code> é o caso
+          mais delicado: ela decide <em>qual expressão</em> é gravada quando duas do
+          mesmo perfil encontram a mesma página. Reordenar ou “otimizar” essa
+          cláusula <strong>muda o conteúdo do banco</strong>.
+        </p>
+        <p>
+          Havia um teste que comparava cada consulta contra o original por checksum
+          e falhava a qualquer alteração. <strong>Os testes foram removidos do
+          repositório</strong>, então hoje essa proteção não existe — o cuidado
+          passou a ser manual. As consultas originais continuam recuperáveis no
+          histórico do git, no commit <code>2febb7a</code>.
+        </p>
+      </div>
+
+      <h3>Permissões</h3>
+
+      <p>
+        Se o esquema for criado por um usuário e a aplicação conectar por outro, o
+        <code>POST /pdf</code> devolve <strong>422</strong> com
+        <code>permission denied for schema recorte</code>. No PostgreSQL, criar um
+        esquema não dá acesso a ele para os demais usuários. O arquivo
+        <code>db/permissoes.sql</code> resolve, e explica cada um dos três
+        <code>GRANT</code> necessários — inclusive o das <em>sequências</em>, que é
+        o que todo mundo esquece.
+      </p>
+    </section>
+
+    <!-- ══════════════════════════ 7 ══════════════════════════ -->
+    <section id="chaves">
+      <span class="rotulo">Seção 7</span>
+      <h2 class="titulo">As chaves de melhoria</h2>
+
+      <p>
+        Dez evoluções técnicas foram implementadas, e <strong>todas nascem
+        desligadas</strong>. Com o ambiente vazio, o serviço se comporta
+        exatamente como o original. Ligar uma chave é uma decisão consciente, e
+        cada uma muda uma coisa só.
+      </p>
+
+      <p>A legenda das pílulas:</p>
+
+      <ul>
+        <li><span class="pilula p-add">adição pura</span> não altera nenhuma rota ou resposta existente. Risco praticamente nulo.</li>
+        <li><span class="pilula p-mud">muda respostas</span> passa a recusar ou responder diferente em casos que antes eram aceitos.</li>
+        <li><span class="pilula p-sem">muda semântica</span> altera <em>o que o serviço faz</em>. Exige decisão de produto.</li>
+      </ul>
+
+      <h3>As dez chaves</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Chave</th><th>Padrão</th><th>Tipo</th><th>O que muda se você ligar</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HEALTH_ENDPOINTS</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-add">adição</span></td>
+              <td>Registra <code>/health/live</code> e <code>/health/ready</code>. O <em>ready</em> verifica o banco e a fila. <code>/ping</code> continua idêntico.</td>
+            </tr>
+            <tr>
+              <td><code>STATUS_ENDPOINT</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-add">adição</span></td>
+              <td>Registra <code>GET /importacao/{id}</code>, que devolve o estado da importação em JSON. Autenticado, como <code>/pdf</code>.</td>
+            </tr>
+            <tr>
+              <td><code>MAX_UPLOAD_BYTES</code></td>
+              <td><code>0</code> (sem limite)</td>
+              <td><span class="pilula p-mud">respostas</span></td>
+              <td>Corpo acima do limite vira <strong>400</strong> com a crítica <code>PDF excede o tamanho máximo</code>. Antes de ligar, meça o tamanho real dos diários.</td>
+            </tr>
+            <tr>
+              <td><code>VALIDAR_ASSINATURA_PDF</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-mud">respostas</span></td>
+              <td>Arquivo que não começa com <code>%PDF-</code> vira <strong>422</strong> e nenhuma importação é registrada. Desligada, um CSV é aceito e processado até falhar sozinho.</td>
+            </tr>
+            <tr>
+              <td><code>RATE_LIMIT_RPS</code></td>
+              <td><code>0</code> (desligado)</td>
+              <td><span class="pilula p-mud">respostas</span></td>
+              <td>Balde de fichas por chave de API, com cabeçalho <code>Retry-After</code>. O limite é <strong>por instância</strong> — com três réplicas, o teto efetivo é o triplo.</td>
+            </tr>
+            <tr>
+              <td><code>RESPOSTA_PROBLEM_JSON</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-mud">respostas</span></td>
+              <td>Respostas de <strong>erro</strong> (≥ 400) passam a sair em <code>application/problem+json</code>. Sucessos continuam em texto. Quebra clientes que analisam o texto do erro.</td>
+            </tr>
+            <tr>
+              <td><code>GRAVACAO_EM_LOTE</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-add">desempenho</span></td>
+              <td>Dois comandos por chave de pesquisa em vez de dois por recorte. O estado final do banco é idêntico — o que muda é o perfil de carga.</td>
+            </tr>
+            <tr>
+              <td><code>MAX_IMPORTACOES_CONCORRENTES</code></td>
+              <td><code>0</code> (sem teto)</td>
+              <td><span class="pilula p-add">carga</span></td>
+              <td>Semáforo no executor. Acima do teto a submissão <strong>enfileira</strong> — não é recusada, e a resposta HTTP não muda. Ligar cedo demais transforma pico em latência.</td>
+            </tr>
+            <tr>
+              <td><code>IDEMPOTENCIA_POR_HASH</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-sem">semântica</span></td>
+              <td>Reenvio de um documento <strong>já finalizado</strong> devolve o id existente sem reprocessar. Exige a migração <code>0002</code> aplicada antes.</td>
+            </tr>
+            <tr>
+              <td><code>VARREDURA_ORFAS</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-sem">semântica</span></td>
+              <td>Tarefa periódica que encontra importações paradas nos estados 1–3. Comece com a política <code>observar</code>, que só registra e conta.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Ajustes das chaves acima</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Variável</th><th>Padrão</th><th>Para que serve</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>VARREDURA_ORFAS_INTERVALO</code></td><td><code>15m</code></td><td>De quanto em quanto tempo a varredura roda.</td></tr>
+            <tr><td><code>VARREDURA_ORFAS_LIMIAR</code></td><td><code>1h</code></td><td>Idade mínima para considerar uma importação presa. <strong>Precisa ser maior que o pior tempo de processamento</strong>, ou a varredura mata trabalho em andamento.</td></tr>
+            <tr><td><code>VARREDURA_ORFAS_POLITICA</code></td><td><code>observar</code></td><td><code>observar</code> registra e conta; <code>erro</code> grava status −1. Não existe <code>reprocessar</code>, porque o documento não é guardado.</td></tr>
+            <tr><td><code>VARREDURA_ORFAS_LOTE</code></td><td><code>100</code></td><td>Quantas linhas uma passagem tranca por vez.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Configuração geral</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Variável</th><th>Padrão</th><th>Observação</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>DATABASE_URL</code></td><td>aponta para o Postgres local</td><td>Único valor que normalmente se define em produção, junto com <code>API_KEY</code>.</td></tr>
+            <tr><td><code>API_KEY</code></td><td>a do repositório</td><td>Sempre defina em produção.</td></tr>
+            <tr><td><code>SERVIDOR_IP</code></td><td><code>0.0.0.0</code></td><td><strong>Diverge do original</strong>, que usava <code>192.168.42.1</code> — endereço que só existia na rede antiga e faria o processo não subir num contêiner. <code>0.0.0.0</code> é um superconjunto.</td></tr>
+            <tr><td><code>SERVIDOR_PORTA</code></td><td><code>6001</code></td><td>Valor inválido cai no padrão sem reclamar, como no original.</td></tr>
+            <tr><td><code>LOG_NIVEL</code> / <code>LOG_FORMATO</code></td><td><code>info</code> / <code>json</code></td><td><code>LOG_FORMATO=text</code> deixa mais legível no terminal.</td></tr>
+            <tr><td><code>SHUTDOWN_TIMEOUT</code></td><td><code>0</code> (espera indefinida)</td><td>Teto do encerramento ordenado. Em contêiner, defina algo como <code>120s</code>.</td></tr>
+            <tr><td><code>CONFIG_ESTRITA</code></td><td><code>false</code></td><td>Transforma configuração malformada em falha de arranque, em vez de cair no padrão em silêncio.</td></tr>
+            <tr><td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td><td>vazio</td><td>Vazio desliga a exportação de rastros.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bloco regra">
+        <div class="cabeca">Ordem de ativação recomendada</div>
+        <p>
+          Ligar tudo de uma vez desperdiça a principal vantagem do desenho: quando
+          algo mudar, você saberá exatamente o quê.
+        </p>
+        <ol class="lista">
+          <li><strong>Observabilidade</strong> — <code>HEALTH_ENDPOINTS</code>, <code>STATUS_ENDPOINT</code>. Risco nulo.</li>
+          <li><strong>Proteção</strong> — <code>MAX_UPLOAD_BYTES</code>, <code>VALIDAR_ASSINATURA_PDF</code>, <code>RATE_LIMIT_RPS</code>. Meça antes: as três recusam o que antes era aceito.</li>
+          <li><strong>Desempenho</strong> — <code>GRAVACAO_EM_LOTE</code>. Não muda o estado final do banco.</li>
+          <li><strong>Controle de carga</strong> — <code>MAX_IMPORTACOES_CONCORRENTES</code>, só depois de ter linha de base das métricas.</li>
+          <li><strong>Semântica</strong> — <code>IDEMPOTENCIA_POR_HASH</code>, <code>VARREDURA_ORFAS</code>. Precisam de concordância de quem opera o negócio.</li>
+        </ol>
+        <p>
+          O guia completo, com valores sugeridos por porte de carga e o cálculo de
+          memória, está em <code>docs/OPERACAO.md</code>.
+        </p>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ 8 ══════════════════════════ -->
+    <section id="deploy">
+      <span class="rotulo">Seção 8</span>
+      <h2 class="titulo">Deploy e Docker</h2>
+
+      <p>
+        O empacotamento está pronto: <code>deploy/Dockerfile</code> em dois
+        estágios, e <code>docker-compose.yml</code> para subir tudo de uma vez
+        localmente.
+      </p>
+
+      <h3>A imagem</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Aspecto</th><th>Escolha</th><th>Por quê</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Estágio de construção</td><td><code>golang:1.24-bookworm</code></td><td>Já traz o compilador C que o MuPDF exige. Nenhum pacote de MuPDF é instalado — o <code>go-fitz</code> embarca a biblioteca estática.</td></tr>
+            <tr><td>Imagem final</td><td><code>gcr.io/distroless/base-debian12:nonroot</code></td><td>Sem shell, sem gerenciador de pacotes, sem utilitários. Superfície de ataque mínima.</td></tr>
+            <tr><td>Usuário</td><td><code>nonroot</code> (uid 65532)</td><td>Declarado explicitamente, para a intenção não depender da tag da base.</td></tr>
+            <tr><td>Compilação</td><td><code>-trimpath -s -w</code></td><td>Reprodutibilidade e tamanho. Versão e revisão entram por <code>ldflags</code>.</td></tr>
+            <tr><td>Sonda</td><td><code>/recorte-api -healthcheck</code></td><td>Sem shell na imagem, não há <code>curl</code>. O próprio binário sabe se sondar.</td></tr>
+            <tr><td>Porta</td><td><code>6001</code></td><td>A mesma do original.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bloco cuidado">
+        <div class="cabeca">Uma checagem que roda na construção</div>
+        <p>
+          O <code>Dockerfile</code> executa <code>ldd</code> no binário e falha se
+          aparecer qualquer dependência compartilhada além da libc e do carregador
+          dinâmico. Isso pega, <em>na construção</em>, um erro que de outra forma só
+          apareceria na primeira extração de PDF em produção.
+        </p>
+      </div>
+
+      <h3>Construindo</h3>
+
+      <pre><code>make docker                       # constrói a imagem e imprime o tamanho
+docker run --rm -p 6001:6001 \
+  -e DATABASE_URL="postgres://..." \
+  -e API_KEY="..." \
+  recorte-api:dev</code></pre>
+
+      <h3>O que definir em produção</h3>
+
+      <p>Com o ambiente vazio o serviço sobe, mas em produção defina ao menos:</p>
+
+      <pre><code>DATABASE_URL=postgres://usuario:senha@host:5432/banco?sslmode=require
+API_KEY=&lt;segredo do orquestrador&gt;
+SHUTDOWN_TIMEOUT=120s
+LOG_FORMATO=json</code></pre>
+
+      <p>
+        <code>SERVIDOR_IP</code> pode ficar no padrão <code>0.0.0.0</code>, que é o
+        necessário dentro de um contêiner.
+      </p>
+
+      <h3>Pontos de atenção operacional</h3>
+
+      <ul>
+        <li>
+          <strong>Segredos.</strong> A chave de API está em claro no
+          <code>docker-compose.yml</code> para facilitar o desenvolvimento. Em
+          produção, use o mecanismo de segredo do orquestrador — a variável de
+          ambiente sempre vence o padrão do código.
+        </li>
+        <li>
+          <strong>Migrações não rodam sozinhas.</strong> <code>db/migrations/</code>
+          tem a linha de base e a migração <code>0002</code>, exigida por
+          <code>IDEMPOTENCIA_POR_HASH</code>. Aplicá-las é passo separado do deploy.
+        </li>
+        <li>
+          <strong>Encerramento.</strong> O serviço drena as importações em andamento
+          antes de sair. Com <code>SHUTDOWN_TIMEOUT=0</code> ele espera
+          indefinidamente — em Kubernetes, isso conflita com o
+          <code>terminationGracePeriodSeconds</code>. Defina um teto.
+        </li>
+        <li>
+          <strong>Escala horizontal.</strong> O serviço não guarda estado em
+          memória entre requisições, então várias réplicas funcionam. Lembre que
+          <code>RATE_LIMIT_RPS</code> e <code>MAX_IMPORTACOES_CONCORRENTES</code>
+          são <em>por instância</em>.
+        </li>
+        <li>
+          <strong>Logs.</strong> Vão para <code>stderr</code> em JSON. O original
+          escrevia em <code>stdout</code> em texto — <code>docker logs</code> e
+          <code>journald</code> capturam os dois, mas
+          <code>./recorte-api &gt; app.log</code> ficaria vazio.
+        </li>
+        <li>
+          <strong>Métricas.</strong> Prometheus e OpenTelemetry estão instrumentados.
+          As que mais importam são a duração por estágio do processamento e o tamanho
+          da fila.
+        </li>
+      </ul>
+
+      <div class="bloco cuidado">
+        <div class="cabeca">O que não foi verificado</div>
+        <p>
+          A imagem <strong>nunca foi construída</strong> — o ambiente de
+          desenvolvimento não tinha daemon Docker. O <code>Dockerfile</code> foi
+          escrito com cuidado e as decisões estão justificadas, mas
+          <code>make docker</code> ainda não rodou uma vez sequer. É o primeiro item
+          a fazer em uma máquina com Docker.
+        </p>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════ 9 ══════════════════════════ -->
+    <section id="armadilhas">
+      <span class="rotulo">Seção 9</span>
+      <h2 class="titulo">Armadilhas conhecidas</h2>
+
+      <p>
+        Estas custaram tempo real durante o desenvolvimento. Conhecê-las antes
+        economiza o seu.
+      </p>
+
+      <h3>“Cadastrei a expressão e ela não encontra nada”</h3>
+
+      <p>
+        <strong>Confira o acento primeiro.</strong> O texto do PDF perde os acentos
+        na indexação; a expressão cadastrada <em>não</em> passa pela mesma
+        normalização. Então <code>PROTEÇÃO</code> nunca casa com nada, e
+        <code>PROTECAO</code> casa. É defeito preservado do original, e o par
+        303/307 dos dados de exemplo existe justamente para demonstrar isso.
+      </p>
+
+      <h3>“Deu 200, status 5, e zero recortes”</h3>
+
+      <p>
+        O <code>id-caderno</code> da submissão não bate com nenhum
+        <code>tb_perfil_caderno</code> habilitado, ou não há perfis cadastrados.
+        O serviço funcionou — simplesmente não havia o que procurar.
+      </p>
+
+      <h3>“<code>POST /pdf</code> devolve 422 <em>Erro ao processar o PDF</em>”</h3>
+
+      <p>
+        <strong>O texto engana.</strong> Ele é literal do original e cobre qualquer
+        falha ao <em>registrar</em> a importação — o PDF nem chega a ser aberto. A
+        causa está sempre no log. As duas comuns:
+      </p>
+
+      <div class="rolagem">
+        <table>
+          <thead><tr><th>No log</th><th>O que é</th><th>Correção</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>relation "recorte.tb_importacao" does not exist</code><br><span style="color:var(--ink-3)">SQLSTATE 42P01</span></td>
+              <td>O esquema não foi criado</td>
+              <td>Com Docker: <code>docker compose down -v</code> e suba de novo — os scripts de <code>db/init/</code> só rodam na criação do volume, e <code>make descer</code> preserva o volume de propósito.</td>
+            </tr>
+            <tr>
+              <td><code>permission denied for schema recorte</code><br><span style="color:var(--ink-3)">SQLSTATE 42501</span></td>
+              <td>O esquema existe, mas quem criou foi outro usuário</td>
+              <td>Rode <code>db/permissoes.sql</code> como superusuário. São três <code>GRANT</code>, e o das sequências é o que se esquece.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Note que nada denuncia esses problemas até a primeira submissão:
+        <code>/ping</code> não toca o banco, e <code>/health/ready</code> só testa a
+        <em>conexão</em>, que funciona — é o acesso ao esquema que falta.
+      </p>
+
+      <h3>“O binário compilou e entra em pânico ao subir”</h3>
+
+      <p>
+        <code>CGO_ENABLED=0</code>. Veja a <a href="#rodar">seção 4</a>.
+      </p>
+
+      <h3>Texto do PDF com espaço entre as letras</h3>
+
+      <p>
+        Diários reais às vezes trazem trechos posicionados letra a letra —
+        <code>TELEG R A FO S</code> em vez de <code>TELEGRAFOS</code>. A extração
+        devolve o que está no documento, e a busca por frase não casa. Não é defeito
+        do serviço: o original também não casaria. Se isso for frequente no seu
+        volume, é assunto para produto, não para código.
+      </p>
+    </section>
+
+    <!-- ══════════════════════════ 10 ═════════════════════════ -->
+    <section id="pendencias">
+      <span class="rotulo">Seção 10</span>
+      <h2 class="titulo">O que ainda falta</h2>
+
+      <p>
+        A recomendação registrada no relatório de paridade é <strong>não desligar o
+        serviço em Rust ainda</strong>. E ela não depende de mais engenharia —
+        depende de três insumos que nunca chegaram.
+      </p>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>Pendência</th><th>Por que bloqueia</th><th>Quem responde</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Corpus de PDFs reais</strong> e cópia dos perfis de produção</td>
+              <td>A verificação rodou sobre 28 documentos que nós mesmos escrevemos, mais um DOU real. Documento sintético não produz o que documento real produz.</td>
+              <td>Operação</td>
+            </tr>
+            <tr>
+              <td><strong>O <code>Cargo.lock</code> do serviço original</strong></td>
+              <td>Sem ele não se sabe a versão exata das bibliotecas que definem o comportamento — o oráculo inteiro é condicional a uma suposição.</td>
+              <td>Quem mantém o Rust</td>
+            </tr>
+            <tr>
+              <td><strong>Espelhamento de tráfego</strong></td>
+              <td>O ferramental de execução em sombra está pronto e testado. Falta a infraestrutura permitir mandar tráfego real para os dois serviços em paralelo.</td>
+              <td>Infraestrutura</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Respondidas as três, o ferramental para fechar o portão já existe: é rodar.
+        O detalhamento está em <code>docs/RELATORIO-PARIDADE.md</code> e as demais
+        perguntas abertas em <code>docs/DECISOES-ABERTAS.md</code>.
+      </p>
+
+      <h3>Sobre os testes</h3>
+
+      <p>
+        A suíte de testes foi <strong>removida do repositório</strong>, junto com as
+        etapas de teste e de análise estática da esteira. Hoje a CI apenas compila.
+        Os testes continuam no histórico do git e podem ser restaurados se o time
+        quiser — vale saber que várias das armadilhas descritas na
+        <a href="#armadilhas">seção 9</a> eram detectadas automaticamente por eles.
+      </p>
+
+      <h3>Documentação de referência</h3>
+
+      <div class="rolagem">
+        <table>
+          <thead><tr><th>Arquivo</th><th>O que tem</th></tr></thead>
+          <tbody>
+            <tr><td><code>README.md</code></td><td>Como rodar, validar com o diário real, e o guia do 422.</td></tr>
+            <tr><td><code>docs/ESPECIFICACAO.md</code></td><td>O comportamento observável, normativo, com a linha do Rust de cada regra.</td></tr>
+            <tr><td><code>docs/INVARIANTES.md</code></td><td>As 23 invariantes de paridade, com casos positivos e negativos.</td></tr>
+            <tr><td><code>docs/OPERACAO.md</code></td><td>Tabela de chaves, ordem de ativação, valores por porte de carga, métricas e alarmes.</td></tr>
+            <tr><td><code>docs/DECISOES-ABERTAS.md</code></td><td>As perguntas pendentes, cada uma com padrão provisório e responsável.</td></tr>
+            <tr><td><code>docs/RELATORIO-PARIDADE.md</code></td><td>A evidência da verificação e a recomendação explícita sobre o corte.</td></tr>
+            <tr><td><code>docs/CONTEXT.md</code></td><td>A memória do projeto: decisões, desvios e o porquê de cada um.</td></tr>
+            <tr><td><code>api/openapi.yaml</code></td><td>O contrato da API, com as rotas opcionais marcadas por <code>x-chave</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bloco regra">
+        <div class="cabeca">Se você só puder levar uma coisa deste documento</div>
+        <p>
+          Com o ambiente vazio, esta versão em Go se comporta <strong>exatamente
+          como o serviço em Rust</strong> — mesmos textos, mesmos códigos, mesmos
+          efeitos no banco, mesmos defeitos. Tudo o que é melhor está atrás de uma
+          chave que você liga quando decidir ligar, uma de cada vez, sabendo o que
+          cada uma muda.
+        </p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="rodape">
+    <span>Serviço de recorte de diários oficiais</span>
+    <span>Go 1.24 · PostgreSQL · MuPDF</span>
+    <span>15 pacotes · 12.079 linhas</span>
+    <span>Porta <code>6001</code></span>
+  </footer>
+
+</div>
+
+<script>
+// Realce da seção corrente no sumário. Usa IntersectionObserver em vez de
+// escutar `scroll`, para não custar nada em documento longo.
+(function () {
+  var links = Array.prototype.slice.call(
+    document.querySelectorAll('.sumario a[href^="#"]')
+  );
+  if (!links.length || !('IntersectionObserver' in window)) return;
+
+  var porId = {};
+  links.forEach(function (a) { porId[a.getAttribute('href').slice(1)] = a; });
+
+  var visiveis = new Set();
+
+  function marcar() {
+    // A seção "ativa" é a que está mais acima entre as visíveis, para o
+    // realce não pular quando duas aparecem juntas.
+    var alvo = null, topo = Infinity;
+    visiveis.forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var y = el.getBoundingClientRect().top;
+      if (y < topo) { topo = y; alvo = id; }
+    });
+    links.forEach(function (a) { a.classList.remove('ativo'); });
+    if (alvo && porId[alvo]) porId[alvo].classList.add('ativo');
+  }
+
+  var observador = new IntersectionObserver(function (entradas) {
+    entradas.forEach(function (e) {
+      if (e.isIntersecting) visiveis.add(e.target.id);
+      else visiveis.delete(e.target.id);
+    });
+    marcar();
+  }, { rootMargin: '-10% 0px -70% 0px' });
+
+  Object.keys(porId).forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) observador.observe(el);
+  });
+})();
+</script>
