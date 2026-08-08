@@ -492,10 +492,68 @@ html { scroll-behavior: smooth; }
       <p>
         O serviço original tinha <strong>730 linhas de Rust num único arquivo</strong>
         — HTTP, banco, extração de PDF, indexação e busca, tudo junto. A reescrita
-        entregou <strong>12.079 linhas de Go em 15 pacotes</strong>, com as
-        responsabilidades separadas e as regras de negócio isoladas da
-        infraestrutura.
+        entregou <strong>cerca de 4.500 linhas de Go de fato</strong>, distribuídas
+        em 15 pacotes, com as responsabilidades separadas e as regras de negócio
+        isoladas da infraestrutura.
       </p>
+
+      <p>
+        A diferença parece grande, e vale entender de onde ela vem — porque a maior
+        parte não é complexidade escolhida. O Rust não tinha 730 linhas: tinha 730
+        linhas <em>mais</em> Tantivy, MuPDF, <code>diacritics</code>,
+        <code>chrono</code> e o framework Salvo, que somam dezenas de milhares e
+        traziam prontos comportamentos que a paridade obrigou a reproduzir.
+      </p>
+
+      <div class="rolagem">
+        <table>
+          <thead>
+            <tr><th>De onde vêm as linhas</th><th class="num">Linhas</th><th class="num">%</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Substitui <strong>biblioteca</strong> que o Rust apenas importava — o índice de busca do Tantivy, a remoção de acentos do <code>diacritics</code>, o analisador de datas permissivo do <code>chrono</code></td>
+              <td class="num">748</td><td class="num">16%</td>
+            </tr>
+            <tr>
+              <td>Substitui o <strong>framework HTTP</strong>: roteamento, análise de <code>multipart</code>, página de erro e cadeia de middleware que o Salvo dava pronto</td>
+              <td class="num">615</td><td class="num">14%</td>
+            </tr>
+            <tr>
+              <td><strong>Melhorias atrás de chave</strong> — não existem no legado e, com tudo no padrão, <strong>não executam</strong></td>
+              <td class="num">1.131</td><td class="num">25%</td>
+            </tr>
+            <tr>
+              <td><strong>O serviço em si</strong>: domínio, fluxos, acesso ao banco e montagem</td>
+              <td class="num">2.040</td><td class="num">45%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Ou seja: <strong>30% do código existe para absorver o que era dependência</strong>,
+        <strong>25% são as melhorias que você liga quando quiser</strong>, e sobra
+        <strong>45% — 2.040 linhas — que é o serviço propriamente dito</strong>. O
+        Rust fazia esse mesmo trabalho em 559 linhas de código, com estado global e
+        descartando erros em uma dúzia de pontos; a diferença aí é injeção explícita
+        de dependências e tratamento de erro, que é o que tornou possível comparar
+        cada camada contra o original.
+      </p>
+
+      <div class="bloco">
+        <div class="cabeca">Sobre o tamanho dos arquivos</div>
+        <p>
+          O repositório tem 12.079 linhas em <code>src/</code>, mas o número que
+          importa é outro: <strong>3.549 linhas são tabelas geradas por máquina</strong>
+          (mapeamento de acentos e classificação Unicode — dados, não lógica), e
+          <strong>54% do que sobra é comentário</strong>. Os comentários não explicam
+          o que o código faz: registram <em>por que</em> ele faz assim, quase sempre
+          citando a linha do Rust que originou a decisão. São eles que impedem
+          alguém de “consertar” um defeito preservado. Medido com o parser do Go,
+          não com busca por <code>//</code>.
+        </p>
+      </div>
 
       <p>
         O trabalho foi organizado em 12 fases. As mais relevantes para entender o
@@ -656,19 +714,19 @@ html { scroll-behavior: smooth; }
       <h4>O núcleo</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>domain</span><span class="linhas">1.012 ln</span></div>
+          <div class="nome"><span>domain</span><span class="linhas">459 ln de código</span></div>
           <div class="oque">Os tipos e as regras do negócio: importação, recorte, perfil, máquina de estados, textos de crítica. Não importa nada de infraestrutura.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>usecase</span><span class="linhas">1.089 ln</span></div>
+          <div class="nome"><span>usecase</span><span class="linhas">608 ln de código</span></div>
           <div class="oque">Os fluxos: <em>ingerir</em> (validar e registrar), <em>processar</em> (extrair, indexar, recortar, gravar) e <em>varrer</em> importações presas.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>app</span><span class="linhas">745 ln</span></div>
+          <div class="nome"><span>app</span><span class="linhas">442 ln de código</span></div>
           <div class="oque">A raiz de composição. Monta o grafo inteiro de dependências, explicitamente, e conduz o ciclo de vida do processo. É por aqui que se entende o sistema todo.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>main</span><span class="linhas">137 ln</span></div>
+          <div class="nome"><span>main</span><span class="linhas">87 ln de código</span></div>
           <div class="oque">Ponto de entrada. Lê as flags <code>-versao</code> e <code>-healthcheck</code>, carrega a configuração e entrega para <code>app</code>.</div>
         </div>
       </div>
@@ -676,19 +734,19 @@ html { scroll-behavior: smooth; }
       <h4>Entrada e saída</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>httpapi</span><span class="linhas">1.098 ln</span></div>
+          <div class="nome"><span>httpapi</span><span class="linhas">586 ln de código</span></div>
           <div class="oque">Rotas, análise do <code>multipart</code> e a página de erro do framework original reproduzida byte a byte. O roteamento é feito à mão porque o <code>ServeMux</code> do Go compara caminhos de outro jeito.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>middleware</span><span class="linhas">485 ln</span></div>
+          <div class="nome"><span>middleware</span><span class="linhas">229 ln de código</span></div>
           <div class="oque">Identificador de requisição, registro, recuperação de pânico, limite de corpo, autenticação e limite de taxa.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>resposta</span><span class="linhas">167 ln</span></div>
+          <div class="nome"><span>resposta</span><span class="linhas">71 ln de código</span></div>
           <div class="oque">Escreve o corpo das respostas. Duas implementações: texto puro (o legado) e <code>problem+json</code>, escolhidas por chave.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>postgres</span><span class="linhas">919 ln</span></div>
+          <div class="nome"><span>postgres</span><span class="linhas">553 ln de código</span></div>
           <div class="oque">Repositórios e as consultas SQL, embutidas no binário a partir de <code>queries/</code>. Ver a <a href="#tabelas">seção 6</a>.</div>
         </div>
       </div>
@@ -696,19 +754,19 @@ html { scroll-behavior: smooth; }
       <h4>Processamento do documento</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>pdftext</span><span class="linhas">2.679 ln</span></div>
-          <div class="oque">Extração via MuPDF e a normalização: junção de palavras quebradas por hífen e remoção de acentos. O maior pacote, e o mais sensível a paridade.</div>
+          <div class="nome"><span>pdftext</span><span class="linhas">199 ln de código</span></div>
+          <div class="oque">Extração via MuPDF e a normalização: junção de palavras quebradas por hífen e remoção de acentos. Pouco código e muita tabela gerada — e o mais sensível a paridade.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>searchidx</span><span class="linhas">2.166 ln</span></div>
+          <div class="nome"><span>searchidx</span><span class="linhas">386 ln de código</span></div>
           <div class="oque">Índice posicional em memória e busca por frase. Reproduz o comportamento do motor original, inclusive o descarte de termos com 40 bytes ou mais.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>worker</span><span class="linhas">300 ln</span></div>
+          <div class="nome"><span>worker</span><span class="linhas">148 ln de código</span></div>
           <div class="oque">Executa as importações em segundo plano, com teto opcional de concorrência e drenagem no encerramento.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>periodico</span><span class="linhas">121 ln</span></div>
+          <div class="nome"><span>periodico</span><span class="linhas">66 ln de código</span></div>
           <div class="oque">Roda uma tarefa em intervalos regulares. Existe para a varredura de importações presas, e nada mais.</div>
         </div>
       </div>
@@ -716,15 +774,15 @@ html { scroll-behavior: smooth; }
       <h4>Apoio</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>config</span><span class="linhas">638 ln</span></div>
+          <div class="nome"><span>config</span><span class="linhas">379 ln de código</span></div>
           <div class="oque">Lê e valida as variáveis de ambiente. Segredos usam um tipo que se redige sozinho em log e em mensagem de erro.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>observability</span><span class="linhas">387 ln</span></div>
+          <div class="nome"><span>observability</span><span class="linhas">242 ln de código</span></div>
           <div class="oque">Registro estruturado, métricas Prometheus e rastros OpenTelemetry.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>shutdown</span><span class="linhas">136 ln</span></div>
+          <div class="nome"><span>shutdown</span><span class="linhas">79 ln de código</span></div>
           <div class="oque">Encerramento ordenado nos mesmos sinais que o original escutava.</div>
         </div>
       </div>
@@ -1469,7 +1527,7 @@ LOG_FORMATO=json</code></pre>
   <footer class="rodape">
     <span>Serviço de recorte de diários oficiais</span>
     <span>Go 1.24 · PostgreSQL · MuPDF</span>
-    <span>15 pacotes · 12.079 linhas</span>
+    <span>15 pacotes · ~4.500 linhas de código</span>
     <span>Porta <code>6001</code></span>
   </footer>
 
