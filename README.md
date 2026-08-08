@@ -47,6 +47,55 @@ Resposta: `PDF carregado com sucesso`. O processamento é **assíncrono** — o 
 confirma o registro, não o resultado. O documento de exemplo casa com os perfis
 semeados e produz um recorte.
 
+### Se `/pdf` devolver 422 `Erro ao processar o PDF`
+
+**O texto engana.** Ele é literal do serviço original (`main.rs:242`) e cobre
+qualquer falha ao **registrar a importação no banco** — o PDF nem chega a ser
+aberto. `/ping` continua respondendo `pong` porque não toca o banco, e
+`/health/ready` também passa, porque só faz `Ping` na conexão.
+
+A causa está no log, sempre:
+
+```sh
+docker compose logs recorte-api | grep "falha ao registrar"
+```
+
+As duas causas comuns, e o que fazer:
+
+| No log | O que é | Correção |
+|---|---|---|
+| `relation "recorte.tb_importacao" does not exist` (42P01) | o esquema não foi criado | ver abaixo |
+| `permission denied for schema recorte` (42501) | o esquema existe, o usuário da aplicação não tem acesso | `psql ... -f db/permissoes.sql` |
+
+**Esquema ausente, com Docker.** Os scripts de `db/init/` rodam **só na criação
+do volume**. Se o projeto já subiu antes, o volume sobreviveu e eles não
+rodaram de novo — e `make descer` preserva o volume de propósito:
+
+```sh
+docker compose down -v      # o -v é o que apaga o volume
+make subir
+```
+
+**Esquema ausente, sem Docker.** Aplique os três arquivos:
+
+```sh
+psql "postgres://recorte:recorte@localhost:5432/recorte" \
+  -f db/init/01-esquema.sql \
+  -f db/init/02-dados-de-exemplo.sql \
+  -f db/init/03-perfis-do-dou-real.sql
+```
+
+**Permissão negada.** Acontece quando o esquema foi criado por um usuário
+(`postgres`, pelo DBeaver) e a aplicação conecta por outro (`recorte`). No
+PostgreSQL, criar um esquema não dá acesso a ele para os demais. Rode como
+superusuário — o próprio arquivo explica o porquê de cada linha:
+
+```sh
+psql "postgres://postgres@localhost:5432/recorte" -f db/permissoes.sql
+```
+
+Não precisa reiniciar a aplicação: a requisição seguinte já passa.
+
 ## Validando com um diário real
 
 `exemplos/diario-de-exemplo.pdf` é sintético: foi escrito para casar. A pergunta
@@ -147,6 +196,7 @@ a conferir.**
 | `src/main/` | Ponto de entrada |
 | `src/` | O serviço: domínio, casos de uso, adaptadores e raiz de composição, um nível de pacotes |
 | `db/init/` | Esquema e dois conjuntos de perfis de exemplo — o sintético e o do diário real |
+| `db/permissoes.sql` | Os `GRANT` do esquema, para quando o dono não é o usuário da aplicação |
 | `db/migrations/` | Migrações de banco |
 | `deploy/Dockerfile`, `docker-compose.yml` | Empacotamento e execução local |
 | `exemplos/` | Dois diários: um sintético, feito para casar, e um **Diário Oficial da União real** |
