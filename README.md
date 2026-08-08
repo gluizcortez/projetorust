@@ -85,14 +85,67 @@ psql "postgres://recorte:recorte@localhost:5432/recorte" \
   -f db/init/03-perfis-do-dou-real.sql
 ```
 
-**Permissão negada.** Acontece quando o esquema foi criado por um usuário
-(`postgres`, pelo DBeaver) e a aplicação conecta por outro (`recorte`). No
-PostgreSQL, criar um esquema não dá acesso a ele para os demais. Rode como
-superusuário — o próprio arquivo explica o porquê de cada linha:
+#### Permissão negada (`42501`) — como rodar `db/permissoes.sql`
+
+Acontece quando o esquema foi criado por um usuário (`postgres`, pelo DBeaver) e
+a aplicação conecta por outro (`recorte`). No PostgreSQL, **criar um esquema não
+dá acesso a ele para os demais usuários** — nem para o dono do banco.
+
+O arquivo `db/permissoes.sql` é **SQL puro**: roda igual no DBeaver, no pgAdmin
+ou no `psql`. Só precisa ser executado por um **superusuário** (normalmente
+`postgres`) ou pelo dono do esquema — o usuário da aplicação não pode conceder
+privilégios a si mesmo.
+
+Escolha **uma** das três formas.
+
+**A) Pelo DBeaver** — a mais direta se você já o tem aberto.
+
+1. Na aba de conexões, conecte-se como **`postgres`**, não como `recorte`. Se
+   ainda não tem essa conexão: *Database → New Database Connection →
+   PostgreSQL*, host `localhost`, porta `5432`, banco `recorte`, usuário
+   `postgres`.
+2. Com essa conexão selecionada, abra um editor SQL: **SQL Editor → New SQL
+   Script** (ou `Ctrl+]`).
+3. Abra `db/permissoes.sql` num editor de texto, copie o conteúdo **inteiro** e
+   cole no script.
+4. Execute tudo de uma vez: **Alt+X** (*Execute script*), **não** `Ctrl+Enter`,
+   que roda só o comando sob o cursor.
+5. Deve aparecer `GRANT` três vezes e `ALTER DEFAULT PRIVILEGES` duas.
+
+**B) Com Docker** — o PostgreSQL está dentro do contêiner, e o `psql` já vem
+instalado nele. Rode da raiz do projeto:
+
+```sh
+docker compose exec -T postgres psql -U postgres -d recorte < db/permissoes.sql
+```
+
+O `-T` desliga o terminal interativo, que atrapalha quando a entrada vem de um
+arquivo. Se o seu serviço de banco não se chama `postgres` no
+`docker-compose.yml`, troque o nome depois do `exec`.
+
+**C) Com `psql` na sua máquina** — só se você já o tem instalado
+(`psql --version` responde). No Ubuntu/Debian é `sudo apt install
+postgresql-client`; no macOS, `brew install libpq`.
 
 ```sh
 psql "postgres://postgres@localhost:5432/recorte" -f db/permissoes.sql
 ```
+
+Se pedir senha, é a do usuário `postgres` do seu banco. Com o
+`docker-compose.yml` deste projeto o usuário é `recorte` e a senha é `recorte` —
+mas esse usuário não serve aqui, porque é justamente ele que não tem permissão.
+Nesse caso use a forma **B**.
+
+**Conferindo.** As três colunas precisam devolver `true`:
+
+```sql
+SELECT has_schema_privilege('recorte', 'recorte', 'USAGE')                     AS entra_no_esquema,
+       has_table_privilege ('recorte', 'recorte.tb_importacao', 'INSERT')      AS insere,
+       has_sequence_privilege('recorte', 'recorte.tb_importacao_id_importacao_seq', 'USAGE') AS usa_sequencia;
+```
+
+O primeiro argumento é o **usuário**, o segundo é o objeto — e aqui os dois se
+chamam `recorte`, o que confunde à primeira vista.
 
 Não precisa reiniciar a aplicação: a requisição seguinte já passa.
 

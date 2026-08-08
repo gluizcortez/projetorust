@@ -8,17 +8,17 @@
 --
 --     permission denied for schema recorte (SQLSTATE 42501)
 --
--- O texto da resposta engana — é literal do serviço original
--- (`main.rs:242`) e cobre QUALQUER falha ao registrar a importação. O PDF nem
--- chega a ser aberto: a falha é no `INSERT`, antes disso.
+-- O texto da resposta engana — é literal do serviço original (`main.rs:242`) e
+-- cobre QUALQUER falha ao registrar a importação. O PDF nem chega a ser
+-- aberto: a falha é no `INSERT`, antes disso.
 --
 -- ------------------------------------------------------------------------
 -- POR QUE ACONTECE
 -- ------------------------------------------------------------------------
 --
 -- O esquema foi criado por um usuário e a aplicação conecta por outro. É o
--- caso típico de quem aplicou `db/init/01-esquema.sql` pelo DBeaver conectado
--- como `postgres` (ou outro superusuário) e depois apontou a aplicação para
+-- caso de quem aplicou `db/init/01-esquema.sql` pelo DBeaver conectado como
+-- `postgres` (ou outro superusuário) e depois apontou a aplicação para
 -- `postgres://recorte:...`. No PostgreSQL, criar um esquema NÃO dá acesso a
 -- ele para os demais usuários — nem para o dono do banco.
 --
@@ -29,27 +29,24 @@
 --
 -- Com `docker compose up` isso não acontece: os scripts de
 -- `/docker-entrypoint-initdb.d` rodam como `POSTGRES_USER`, que é o mesmo
--- `recorte` que a aplicação usa, então o dono já está certo.
+-- `recorte` que a aplicação usa, então o dono já nasce certo.
 --
 -- ------------------------------------------------------------------------
--- COMO USAR
+-- COMO RODAR
 -- ------------------------------------------------------------------------
 --
--- Rode como SUPERUSUÁRIO ou como dono do esquema — o usuário da aplicação não
--- pode conceder a si mesmo:
+-- Precisa ser executado por um SUPERUSUÁRIO ou pelo dono do esquema — o
+-- usuário da aplicação não pode conceder privilégios a si mesmo. O passo a
+-- passo das três formas (DBeaver, Docker e psql) está no README, na seção
+-- "Se /pdf devolver 422".
 --
---     psql "postgres://postgres@localhost:5432/recorte" -f db/permissoes.sql
+-- Este arquivo é SQL puro: não usa `\set` nem `\if`, então roda igual no
+-- psql, no DBeaver, no pgAdmin ou em qualquer cliente.
 --
--- Trocando o nome do usuário, se não for `recorte`:
---
---     psql ... -v app=meu_usuario -f db/permissoes.sql
+-- Se o usuário da sua aplicação NÃO se chama `recorte`, troque o nome nas
+-- cinco linhas abaixo — é o único lugar em que ele aparece.
 --
 -- Não é preciso reiniciar a aplicação: a próxima requisição já passa.
-
-\if :{?app}
-\else
-    \set app recorte
-\endif
 
 -- ------------------------------------------------------------------------
 -- Os três níveis, todos necessários
@@ -58,21 +55,20 @@
 -- MEDIDO submetendo o mesmo PDF depois de cada linha: conceder só o primeiro
 -- troca o erro por `permission denied for table tb_importacao`, e só os dois
 -- primeiros por `permission denied for sequence
--- tb_importacao_id_importacao_seq`. A sequência é fácil de esquecer e é o que
+-- tb_importacao_id_importacao_seq`. A sequência é a que se esquece, e é o que
 -- `nextval` usa para gerar `id_importacao`.
 
 -- 1. Entrar no esquema.
-GRANT USAGE ON SCHEMA recorte TO :app;
+GRANT USAGE ON SCHEMA recorte TO recorte;
 
 -- 2. Ler e escrever nas tabelas.
 --
--- DELETE entra porque a migração de linha de base e a manutenção o usam; o
--- serviço em si nunca apaga linha.
+-- DELETE entra porque a manutenção o usa; o serviço em si nunca apaga linha.
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON ALL TABLES IN SCHEMA recorte TO :app;
+    ON ALL TABLES IN SCHEMA recorte TO recorte;
 
 -- 3. Avançar as sequências das chaves primárias.
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA recorte TO :app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA recorte TO recorte;
 
 -- ------------------------------------------------------------------------
 -- Tabelas e sequências CRIADAS DEPOIS
@@ -86,10 +82,23 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA recorte TO :app;
 -- é quem vai criar os objetos futuros.
 
 ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA recorte
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO recorte;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA recorte
-    GRANT USAGE, SELECT ON SEQUENCES TO :app;
+    GRANT USAGE, SELECT ON SEQUENCES TO recorte;
+
+-- ------------------------------------------------------------------------
+-- CONFERIR SE FUNCIONOU
+-- ------------------------------------------------------------------------
+--
+-- As três linhas precisam devolver `true`. Rode como qualquer usuário:
+--
+--     SELECT has_schema_privilege('recorte', 'recorte', 'USAGE')            AS entra_no_esquema,
+--            has_table_privilege ('recorte', 'recorte.tb_importacao', 'INSERT') AS insere,
+--            has_sequence_privilege('recorte', 'recorte.tb_importacao_id_importacao_seq', 'USAGE') AS usa_sequencia;
+--
+-- O primeiro argumento é o USUÁRIO, o segundo é o objeto. Os dois se chamam
+-- `recorte` aqui — o usuário e o esquema —, o que confunde à primeira vista.
 
 -- ------------------------------------------------------------------------
 -- A ALTERNATIVA, se você prefere não gerenciar permissões
