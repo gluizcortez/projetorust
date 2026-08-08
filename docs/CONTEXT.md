@@ -2357,3 +2357,95 @@ continua aparecendo.
 | Resposta do porte ao DOU real | `200 PDF carregado com sucesso`, 5 recortes |
 
 A sonda saiu da árvore, como as anteriores: `git checkout 71e5775 -- tools/sonda-http`.
+
+---
+
+## Enxugamento do código Go — a pedido, medidas 1 e 2
+
+Duas medidas de uma análise de redução, escolhidas por serem as de **risco
+zero**: nenhuma altera comportamento, e as duas foram verificadas rodando.
+
+### Medida 1 — código inalcançável
+
+`deadcode` a partir de `src/main` acusou **9 funções que nada alcança**, todas
+órfãs da remoção da suíte de testes:
+
+| Função | Onde estava | Por que existia |
+|---|---|---|
+| `Tokenizar` + `acrescentar` | `searchidx/tokenizer.go` | substituída por `TokenizarComPosicao` na F12; sobreviveu porque os testes ainda a chamavam |
+| `ConsultasLiterais`, `ConsultasDeEvolucao` | `postgres/queries.go` | expunham o SQL para o teste de paridade textual por checksum |
+| `Endereco` | `app/app.go` | o teste de integração esperava a porta por ela |
+| `PadroesDoServidor` | `httpapi/servidor.go` | asserção dos cinco tempos limite |
+| `ComIDImportacao`, `ComIDPerfil` | `observability/contexto.go` | propagação exercitada só em teste |
+| `ComoErroDeConfiguracao` | `config/config.go` | extração do erro tipado, usada em asserção |
+
+**A documentação foi preservada, não descartada.** O doc de `Tokenizar`
+descrevia os TRÊS ESTÁGIOS do analisador do Tantivy — segmentação, descarte por
+comprimento, minúsculas — que é informação normativa e vale para
+`TokenizarComPosicao` também. O bloco foi **transplantado** para lá antes de a
+função sair. Apagar teria custado mais que as 50 linhas economizadas.
+
+O comentário de `queries.go` que dizia "fora de `ConsultasLiterais()`" foi
+reescrito, porque a função deixou de existir e a frase viraria referência a
+fantasma.
+
+### Medida 2 — fusão de arquivos por assunto
+
+Metade dos arquivos tinha menos de 80 linhas; `domain` tinha 11 arquivos para
+457 linhas de código, média de 41.
+
+| Novo arquivo | Reúne | Critério |
+|---|---|---|
+| `domain/modelo.go` | `importacao.go`, `recorte.go`, `perfil.go` | os tipos — **o quê** o serviço manipula |
+| `domain/validacao.go` | `validacao.go`, `critica.go`, `errors.go` | a validação e os erros que ela produz |
+| `observability/observabilidade.go` | `logger.go`, `tracing.go`, `contexto.go` | as três faces que se usam sempre juntas |
+| `postgres/repositorios.go` | os quatro `*_repo.go` | quatro arquivos com o mesmo formato |
+| `postgres/conexao.go` | `pool.go`, `consultador.go`, `data.go` | como se fala com o banco |
+| `pdftext/extrator.go` | `mupdf.go`, `decorador.go` | o cru e o decorador **juntos**, para dificultar repetir o engano da F12 |
+| `httpapi/router.go` | + `servidor.go` | rotas e o `http.Server` que as serve |
+
+Nenhuma linha de lógica foi alterada — os corpos são os mesmos, no mesmo
+pacote. Os comentários de topo de cada arquivo viraram comentário de seção
+dentro do novo, para nenhuma explicação se perder.
+
+### O balanço
+
+| | Antes | Depois |
+|---|---:|---:|
+| Arquivos escritos à mão | 50 | **37** |
+| Linhas totais em `src/` (à mão) | 8.530 | 8.370 |
+| **Linhas de código** | 4.534 | **4.407** |
+| Comentário | 3.025 | 3.029 |
+| Funções inalcançáveis | 9 | **0** |
+
+### Verificado rodando, porque não há mais testes
+
+Estático: `gofmt` limpo, `go vet` limpo, `golangci-lint` 0 issues, `deadcode`
+sem nada.
+
+Comportamental, contra os resultados **conhecidos** de antes:
+
+```
+GET /ping            200 "pong"          GET /              405
+POST /pdf sem chave  401 "Faltou a…"     GET /./ping        404
+GET /naoexiste       404                 GET /ping%2F       404
+
+diario-de-exemplo.pdf   status 5, 1 recorte, perfil 7, pág. 2, ALFA CONSTRUCOES
+dou-secao1-2026-07-08   status 5, 5 recortes
+  matriz 301–308        5 casam, 3 não — linha a linha idêntica
+```
+
+Tudo igual. **É a segunda vez nesta semana que a ausência da suíte transforma
+uma mudança mecânica em verificação manual** — funcionou, mas o custo aparece.
+
+### Sobre as referências nos documentos
+
+`docs/roadmap-migracao-rust-go.html` e as seções antigas deste CONTEXT citam
+caminhos que não existem mais — `internal/domain/critica.go` e afins. **Não
+foram reescritos de propósito:** os dois são registro histórico do que foi
+decidido em cada fase, e já estavam defasados desde a reestruturação para
+`src/`. Reescrevê-los seria falsificar o log. O mapa de-para está na tabela
+acima.
+
+`docs/kickoff.html`, que é o documento VIVO, foi atualizado: números,
+contagem por pacote e a nota de organização dos arquivos.

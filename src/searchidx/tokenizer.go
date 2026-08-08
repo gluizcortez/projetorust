@@ -48,8 +48,20 @@ func ehAlfanumerico(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-// Tokenizar reproduz o analisador `default` do Tantivy, nos três estágios e
-// nesta ordem.
+// TermoPosicionado é um termo sobrevivente com a POSIÇÃO que o Tantivy lhe
+// atribui.
+type TermoPosicionado struct {
+	Termo string
+	// Posicao conta TODOS os termos segmentados, inclusive os descartados por
+	// comprimento, a partir de zero.
+	Posicao int
+}
+
+// TokenizarComPosicao reproduz o analisador `default` do Tantivy e devolve os
+// termos sobreviventes COM a numeração que ele atribui — que conta também os
+// descartados.
+//
+// # Os três estágios, nesta ordem
 //
 //  1. segmentação  — um termo é a maior sequência de runas alfanuméricas;
 //     toda outra runa é separador
@@ -61,56 +73,6 @@ func ehAlfanumerico(r rune) bool {
 //
 // A ordem importa: o descarte por comprimento acontece ANTES da conversão para
 // minúsculas, e para alguns caracteres a conversão muda o número de bytes.
-func Tokenizar(s string) []string {
-	if s == "" {
-		return nil
-	}
-
-	// A capacidade inicial evita realocação no caminho quente: a função roda
-	// sobre o texto inteiro de cada página, de cada documento.
-	termos := make([]string, 0, len(s)/8+1)
-
-	inicio := -1
-	for i, r := range s {
-		if ehAlfanumerico(r) {
-			if inicio < 0 {
-				inicio = i
-			}
-			continue
-		}
-		if inicio >= 0 {
-			termos = acrescentar(termos, s[inicio:i])
-			inicio = -1
-		}
-	}
-	if inicio >= 0 {
-		termos = acrescentar(termos, s[inicio:])
-	}
-
-	return termos
-}
-
-// acrescentar aplica os estágios 2 e 3 a um termo recém-segmentado.
-func acrescentar(termos []string, termo string) []string {
-	// Estágio 2 — comprimento em BYTES, explicitamente (INV-P04).
-	if len(termo) >= LimiteComprimentoTermo {
-		return termos
-	}
-	// Estágio 3 — minúsculas.
-	return append(termos, strings.ToLower(termo))
-}
-
-// TermoPosicionado é um termo sobrevivente com a POSIÇÃO que o Tantivy lhe
-// atribui.
-type TermoPosicionado struct {
-	Termo string
-	// Posicao conta TODOS os termos segmentados, inclusive os descartados por
-	// comprimento, a partir de zero.
-	Posicao int
-}
-
-// TokenizarComPosicao devolve os termos sobreviventes COM a numeração do
-// Tantivy — que conta também os descartados.
 //
 // # Por que a posição não é o índice na fatia de Tokenizar
 //

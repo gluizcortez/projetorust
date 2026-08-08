@@ -1,3 +1,5 @@
+// A conexão com o banco: o pool, a abstração de quem executa uma consulta
+// (pool ou transação, indistintamente) e a conversão de data do domínio.
 package postgres
 
 import (
@@ -5,9 +7,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/gluizcortez/projetorust/src/config"
+	"github.com/gluizcortez/projetorust/src/domain"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Parâmetros do pool.
@@ -67,4 +71,57 @@ func NovoPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	}
 
 	return pool, nil
+}
+
+// consultador é o mínimo que os repositórios precisam de um executor de SQL.
+//
+// Tanto *pgxpool.Pool quanto pgx.Tx o satisfazem, e é isso que permite ao
+// mesmo repositório participar de uma transação quando existe uma, sem
+// duplicar código nem receber a transação por parâmetro.
+type consultador interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+var (
+	_ consultador = (*pgxpool.Pool)(nil)
+	_ consultador = (pgx.Tx)(nil)
+)
+
+// chaveDeTransacao é o tipo da chave de contexto que carrega a transação.
+// Não exportado: ninguém fora deste pacote consegue colidir com ele.
+type chaveDeTransacao struct{}
+
+// comTransacao anexa a transação corrente ao contexto.
+func comTransacao(ctx context.Context, tx pgx.Tx) context.Context {
+	return context.WithValue(ctx, chaveDeTransacao{}, tx)
+}
+
+// daTransacao devolve a transação corrente, se houver.
+func daTransacao(ctx context.Context) (pgx.Tx, bool) {
+	tx, ok := ctx.Value(chaveDeTransacao{}).(pgx.Tx)
+	return tx, ok
+}
+
+// base resolve o executor: a transação do contexto quando existe, o pool
+// quando não existe.
+type base struct {
+	pool *pgxpool.Pool
+}
+
+func (b base) consultador(ctx context.Context) consultador {
+	if tx, ok := daTransacao(ctx); ok {
+		return tx
+	}
+	return b.pool
+}
+
+// dataEmUTC converte a data pura do domínio para time.Time à meia-noite UTC.
+//
+// UTC é obrigatório e não é detalhe: com o fuso local do processo, uma data
+// como 2024-03-15 pode chegar ao driver como 2024-03-14T21:00-03:00 e ser
+// gravada com o dia anterior. Ver docs/INVARIANTES.md, INV-P16.
+func dataEmUTC(d domain.Data) time.Time {
+	return time.Date(d.Ano(), time.Month(d.Mes()), d.Dia(), 0, 0, 0, 0, time.UTC)
 }

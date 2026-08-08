@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -500,11 +499,4 @@ func (l *leitor) nivelDeLog(nome string, padrao slog.Level) slog.Level {
 		l.anotar("%s=%q não é um nível (use debug, info, warn, error)", nome, bruto)
 		return padrao
 	}
-}
-
-// ComoErroDeConfiguracao extrai o erro tipado de uma cadeia de erros.
-func ComoErroDeConfiguracao(err error) (*ErroDeConfiguracao, bool) {
-	var alvo *ErroDeConfiguracao
-	ok := errors.As(err, &alvo)
-	return alvo, ok
 }

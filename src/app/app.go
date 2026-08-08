@@ -287,19 +287,6 @@ func Novo(
 	})
 }
 
-// Endereco devolve onde o servidor REALMENTE escuta.
-//
-// Antes de Executar, é o endereço configurado. Depois, é o efetivo — que difere
-// quando a porta configurada é 0 e o sistema escolhe uma efêmera.
-//
-// Seguro para chamar de outra goroutine enquanto o serviço executa.
-func (a *App) Endereco() string {
-	if efetivo := a.enderecoEfetivo.Load(); efetivo != nil {
-		return *efetivo
-	}
-	return a.servidor.Addr
-}
-
 // Executar sobe o servidor e bloqueia até o encerramento.
 //
 // `ctx` é cancelado no primeiro sinal. `forcar`, quando não nulo, é fechado no

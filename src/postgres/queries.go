@@ -38,8 +38,8 @@ var arquivoRecorteTextoInserir string
 // -------------------------------------------------------------------------
 //
 // As cinco abaixo NÃO existem no legado e por isso vivem em queries/f11/, sem o
-// marcador de consulta literal e fora de ConsultasLiterais(): não há original
-// com que compará-las. Todas só são executadas com a chave correspondente
+// marcador de consulta literal: não há original com que compará-las, byte a
+// byte, como se faz com as sete de cima. Todas só são executadas com a chave
 // ligada — com os padrões, o serviço emite exatamente as sete consultas do
 // legado, nem uma a mais.
 
@@ -57,20 +57,6 @@ var sqlRecorteInserirLote string
 
 //go:embed queries/f11/recorte_texto_inserir_lote.sql
 var sqlRecorteTextoInserirLote string
-
-// ConsultasDeEvolucao expõe as consultas novas para os testes.
-//
-// Existe para que o teste de paridade textual possa AFIRMAR que nenhuma delas
-// aparece em ConsultasLiterais: as duas listas precisam ser disjuntas.
-func ConsultasDeEvolucao() map[string]string {
-	return map[string]string{
-		"importacao_resumo":          sqlImportacaoResumo,
-		"importacao_equivalente":     sqlImportacaoEquivalente,
-		"importacoes_presas":         sqlImportacoesPresas,
-		"recorte_inserir_lote":       sqlRecorteInserirLote,
-		"recorte_texto_inserir_lote": sqlRecorteTextoInserirLote,
-	}
-}
 
 // marcadorDeConsulta separa o cabeçalho explicativo do texto literal.
 //
@@ -105,19 +91,3 @@ var (
 	sqlRecorteInserir      = consultaLiteral(arquivoRecorteInserir)
 	sqlRecorteTextoInserir = consultaLiteral(arquivoRecorteTextoInserir)
 )
-
-// ConsultasLiterais expõe as consultas para o teste de paridade textual.
-//
-// A chave é o nome da função de origem em reference/main.rs, para que a
-// mensagem de falha aponte direto para o trecho a conferir.
-func ConsultasLiterais() map[string]string {
-	return map[string]string{
-		"registrar_pdf":                sqlImportacaoInserir,
-		"obter_chaves_pesquisa":        sqlChavesPesquisa,
-		"salvar_recorte/recorte":       sqlRecorteInserir,
-		"salvar_recorte/texto":         sqlRecorteTextoInserir,
-		"atualizar_status_importacao":  sqlImportacaoStatus,
-		"registrar_inicio_importacao":  sqlImportacaoInicio,
-		"registrar_termino_importacao": sqlImportacaoTermino,
-	}
-}
