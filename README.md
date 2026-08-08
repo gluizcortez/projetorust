@@ -149,6 +149,70 @@ chamam `recorte`, o que confunde à primeira vista.
 
 Não precisa reiniciar a aplicação: a requisição seguinte já passa.
 
+## Diagnóstico: procurar uma expressão num PDF
+
+Quando alguém pergunta *"por que o recorte do cliente X não saiu?"*, a resposta
+costuma exigir submeter o documento de verdade e depois vasculhar o banco. O
+endpoint `POST /pdf-verificacao` responde direto, **sem gravar nada**.
+
+Ele nasce desligado. Para usar:
+
+```sh
+VERIFICACAO_ENDPOINT=true go run ./src/main
+```
+
+```sh
+curl -X POST http://localhost:6001/pdf-verificacao \
+  -H "X-API-KEY: 01956cb2-2f85-7440-9767-1a6651c10e0f" \
+  -F "data-caderno=2026-07-08" \
+  -F "data-disponibilizacao=2026-07-08" \
+  -F "id-usuario=44521" \
+  -F "id-caderno=1" \
+  -F "expressao=Dra Deborah da Silva Felix" \
+  -F "pdf=@exemplos/dou-secao1-2026-07-08.pdf"
+```
+
+```json
+{
+  "expressao": "Dra Deborah da Silva Felix",
+  "termos_buscados": ["dra", "deborah", "da", "silva", "felix"],
+  "encontrado": true,
+  "total_ocorrencias": 1,
+  "total_paginas": 1,
+  "ocorrencias": [
+    { "pagina": 1, "trecho": "…Relatora: Dra. Deborah da Silva Felix. Retirado de pauta…" }
+  ]
+}
+```
+
+**A busca é exatamente a mesma de `/pdf`** — mesmo extrator, mesma normalização,
+mesmo índice. Isso é o ponto: uma ferramenta que buscasse de outro jeito
+mentiria sobre o serviço. Ela reproduz até os defeitos preservados — e explica
+quando eles agem:
+
+```sh
+-F "expressao=LEI GERAL DE PROTEÇÃO DE DADOS"      # com acento
+```
+```json
+{
+  "encontrado": false,
+  "diagnostico": [
+    "A expressão tem ACENTO. O texto do documento perde os acentos na indexação
+     e a expressão não passa pela mesma normalização, então ela nunca casa.
+     É defeito preservado do serviço original (INV-P19). Tente sem acento."
+  ]
+}
+```
+
+O campo `diagnostico` também aponta termo descartado por comprimento (INV-P03),
+expressão que só tem pontuação (INV-P06) e PDF sem camada de texto. E
+`termos_buscados` mostra o que a busca de fato procurou — ver isso resolve
+metade das dúvidas sozinho.
+
+Responde **200 mesmo quando não encontra**: "não achei" é resultado, não erro.
+E **não toca no banco** — nenhuma importação é registrada, nenhum recorte
+gravado.
+
 ## Validando com um diário real
 
 `exemplos/diario-de-exemplo.pdf` é sintético: foi escrito para casar. A pergunta

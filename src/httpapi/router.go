@@ -44,6 +44,9 @@ const (
 	// RotaHealthLive e RotaHealthReady são de HEALTH_ENDPOINTS.
 	RotaHealthLive  = "/health/live"
 	RotaHealthReady = "/health/ready"
+
+	// RotaVerificacao é POST /pdf-verificacao (VERIFICACAO_ENDPOINT).
+	RotaVerificacao = "/pdf-verificacao"
 )
 
 // Ingestor é a porta do caso de uso que o manipulador de upload usa.
@@ -89,6 +92,14 @@ type Dependencias struct {
 	// Pronto informa se as dependências estão alcançáveis, para /health/ready.
 	// Só é exigido quando HealthEndpoints está ligado.
 	Pronto func(context.Context) error
+
+	// VerificacaoEndpoint registra POST /pdf-verificacao. É ADIÇÃO PURA:
+	// nenhuma rota existente muda. Exige Verificador.
+	VerificacaoEndpoint bool
+
+	// Verificador atende POST /pdf-verificacao. Só é exigido quando
+	// VerificacaoEndpoint está ligado.
+	Verificador Verificador
 }
 
 // NovoRouter monta a cadeia de middleware e as rotas.
@@ -124,6 +135,9 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 	if d.HealthEndpoints && d.Pronto == nil {
 		return nil, errors.New("httpapi: HEALTH_ENDPOINTS ligado exige Pronto")
 	}
+	if d.VerificacaoEndpoint && d.Verificador == nil {
+		return nil, errors.New("httpapi: VERIFICACAO_ENDPOINT ligado exige Verificador")
+	}
 
 	escritor := resposta.Escolher(d.RespostaProblemJSON, d.Logger)
 	s := &servico{
@@ -133,6 +147,7 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 		maxUploadBytes: d.MaxUploadBytes,
 		importacoes:    d.Importacoes,
 		pronto:         d.Pronto,
+		verificador:    d.Verificador,
 	}
 
 	negar := func(w http.ResponseWriter, r *http.Request, codigo int, texto string) {
@@ -162,6 +177,13 @@ func NovoRouter(d Dependencias) (http.Handler, error) {
 	if d.StatusEndpoint {
 		manipuladores[RotaImportacao] = autenticado(s.consultarImportacao)
 		metodos[RotaImportacao] = http.MethodGet
+	}
+
+	// EVOLUÇÃO — VERIFICACAO_ENDPOINT. Adição pura: nenhuma rota existente
+	// muda. Autenticada como /pdf, porque a resposta traz trechos do documento.
+	if d.VerificacaoEndpoint {
+		manipuladores[RotaVerificacao] = autenticado(s.verificarPDF)
+		metodos[RotaVerificacao] = http.MethodPost
 	}
 
 	// EVOLUÇÃO — HEALTH_ENDPOINTS. `/ping` NÃO é tocado: continua respondendo
@@ -299,11 +321,12 @@ type servico struct {
 	escritor       resposta.Escritor
 	maxUploadBytes int64
 
-	// As duas abaixo só são preenchidas com STATUS_ENDPOINT e HEALTH_ENDPOINTS
-	// ligadas, respectivamente. Nulas, os manipuladores que as usam sequer estão
-	// registrados — NovoRouter recusa a montagem incoerente.
+	// As três abaixo só são preenchidas com STATUS_ENDPOINT, HEALTH_ENDPOINTS e
+	// VERIFICACAO_ENDPOINT ligadas, respectivamente. Nulas, os manipuladores que
+	// as usam sequer estão registrados — NovoRouter recusa a montagem incoerente.
 	importacoes ConsultorDeImportacao
 	pronto      func(context.Context) error
+	verificador Verificador
 }
 
 // ping reproduz reference/main.rs:112-115. Sem autenticação, sem consultar o

@@ -170,6 +170,10 @@ type Config struct {
 	StatusEndpoint             bool
 	HealthEndpoints            bool
 
+	// VerificacaoEndpoint registra POST /pdf-verificacao, a busca manual de uma
+	// expressão num PDF para diagnóstico do time técnico. NÃO toca no banco.
+	VerificacaoEndpoint bool
+
 	// --- ajustes da varredura de órfãs ---
 	//
 	// Só têm efeito com VARREDURA_ORFAS ligada. Os padrões são conservadores de
@@ -336,6 +340,7 @@ func Carregar(ctx context.Context) (*Config, error) {
 	cfg.RateLimitRPS = l.inteiro("RATE_LIMIT_RPS", 0)
 	cfg.StatusEndpoint = l.booleano("STATUS_ENDPOINT", false)
 	cfg.HealthEndpoints = l.booleano("HEALTH_ENDPOINTS", false)
+	cfg.VerificacaoEndpoint = l.booleano("VERIFICACAO_ENDPOINT", false)
 
 	// Ajustes da varredura. Lidos SEMPRE, para que um valor inválido seja
 	// recusado no arranque em vez de na primeira vez que alguém ligar a chave.

@@ -186,6 +186,94 @@ paths:
             no manipulador fecha a conexão sem resposta. O corpo vai vazio de
             propósito: qualquer texto seria invenção.
 
+  /pdf-verificacao:
+    post:
+      tags: [operação]
+      operationId: verificarPDF
+      summary: Procura uma expressão num PDF, sem persistir nada
+      x-chave: VERIFICACAO_ENDPOINT
+      description: |
+        **Só existe com `VERIFICACAO_ENDPOINT=true`.** Desligada — o padrão —,
+        este caminho devolve 404 com a página HTML de rota inexistente.
+
+        Rota de DIAGNÓSTICO do time técnico, não do fluxo do produto. Responde,
+        sobre um PDF em mãos, a pergunta que hoje só se responde submetendo o
+        documento de verdade e depois consultando o banco: *esta expressão
+        aparece? em que página? e se não aparece, por quê?*
+
+        **Não interage com o banco de dados.** Nenhuma importação é registrada,
+        nenhum recorte é gravado, nenhum status muda.
+
+        A busca é a MESMA de `POST /pdf` — mesmo extrator, mesma normalização,
+        mesmo índice, mesma busca por frase —, então ela reproduz também os
+        defeitos preservados: expressão com acento não casa. O campo
+        `diagnostico` da resposta explica quando isso acontece.
+
+        Responde **200 mesmo quando nada é encontrado**: "não achei" é
+        resultado, não erro.
+      security:
+        - ChaveDeAPI: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [data-caderno, data-disponibilizacao, id-usuario, id-caderno, pdf, expressao]
+              properties:
+                data-caderno:
+                  type: string
+                  example: "2026-07-08"
+                data-disponibilizacao:
+                  type: string
+                  example: "2026-07-08"
+                id-usuario:
+                  type: string
+                  example: "44521"
+                id-caderno:
+                  type: string
+                  example: "1"
+                pdf:
+                  type: string
+                  format: binary
+                expressao:
+                  type: string
+                  description: |
+                    O que procurar — um nome, um número de processo, uma razão
+                    social. Vai para a busca exatamente como veio, porque é
+                    assim que a expressão cadastrada de um perfil vai.
+                  example: "Dra Deborah da Silva Felix"
+      responses:
+        "200":
+          description: |
+            A pergunta foi respondida. Confira `encontrado`, não o status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Verificacao" }
+        "400":
+          description: |
+            `expressao` ausente, expressão que o filtro não aceita, ou as
+            mesmas críticas de campo de `POST /pdf`, no mesmo formato.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Expressão de verificação não informada
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+        "401":
+          $ref: "#/components/responses/NaoAutorizado"
+        "405":
+          description: Método diferente de POST.
+        "422":
+          description: |
+            O documento não pôde ser lido ou indexado.
+          content:
+            text/plain:
+              schema: { type: string }
+              example: Erro ao verificar o PDF
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problema" }
+
   /importacao/{id}:
     get:
       tags: [operação]
@@ -353,6 +441,62 @@ components:
         como ausente — e as duas respostas têm textos diferentes.
 
   schemas:
+    Verificacao:
+      type: object
+      description: |
+        O resultado da busca manual. O campo que mais importa quando algo dá
+        errado é `diagnostico`, não `ocorrencias`.
+      required: [expressao, termos_buscados, encontrado, total_ocorrencias, total_paginas, ocorrencias]
+      properties:
+        expressao:
+          type: string
+          description: O texto consultado, como veio.
+          example: "Dra Deborah da Silva Felix"
+        termos_buscados:
+          type: array
+          description: |
+            Os termos que a expressão produziu na tokenização — é o que a busca
+            de fato procurou. Ver isto responde metade das dúvidas sozinho:
+            uma expressão que vira zero termos nunca casa.
+          items: { type: string }
+          example: ["dra", "deborah", "da", "silva", "felix"]
+        encontrado:
+          type: boolean
+        total_ocorrencias:
+          type: integer
+        total_paginas:
+          type: integer
+          description: Quantas páginas o documento tem.
+        ocorrencias:
+          type: array
+          description: |
+            As páginas em que a expressão foi encontrada, em ordem. Uma página
+            aparece no máximo uma vez, como no laço de recorte (INV-P12).
+          items:
+            type: object
+            required: [pagina]
+            properties:
+              pagina:
+                type: integer
+                description: Começa em 1.
+              trecho:
+                type: string
+                description: |
+                  Texto ao redor da ocorrência, para conferência visual.
+                  OMITIDO quando a expressão casou por frase mas a sequência não
+                  pôde ser localizada literalmente no texto — a ocorrência
+                  continua válida.
+        diagnostico:
+          type: array
+          description: |
+            O motivo provável quando nada foi encontrado, e advertências mesmo
+            quando algo foi. Aponta acento (INV-P19), termo descartado por
+            comprimento (INV-P03) e expressão que não gera termo (INV-P06).
+            Omitido quando não há nada a apontar.
+          items: { type: string }
+          example:
+            - "A expressão tem ACENTO. O texto do documento perde os acentos na indexação e a expressão não passa pela mesma normalização, então ela nunca casa. É defeito preservado do serviço original (INV-P19). Tente sem acento."
+
     SubmissaoPDF:
       type: object
       description: |

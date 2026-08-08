@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gluizcortez/projetorust/src/domain"
+	"github.com/gluizcortez/projetorust/src/usecase"
 )
 
 // Este arquivo tem as rotas que NÃO existem no legado: o endpoint de status e as
@@ -200,4 +201,149 @@ func (s *servico) healthReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.escritor.Escrever(w, r, http.StatusOK, TextoPronto, nil)
+}
+
+// -------------------------------------------------------------------------
+// POST /pdf-verificacao — VERIFICACAO_ENDPOINT
+// -------------------------------------------------------------------------
+//
+// Busca manual de uma expressão num PDF, para diagnóstico do time técnico.
+//
+// Recebe os MESMOS campos de `/pdf` mais `expressao`, roda o MESMO caminho de
+// extração, normalização, indexação e busca, e devolve o que encontrou em JSON.
+// Não registra importação, não grava recorte, não muda status — não tem
+// repositório algum entre as suas dependências.
+//
+// # Por que exige a chave de API
+//
+// A resposta traz TRECHOS DO DOCUMENTO submetido. Ainda que o documento venha
+// do próprio cliente, deixar a rota aberta faria dela um extrator de texto de
+// PDF anônimo, hospedado por nós. Autenticada, como `/pdf`.
+
+// Verificador é a porta do caso de uso de verificação manual.
+//
+// Declarada aqui, pelo consumidor, para que o pacote HTTP não dependa do tipo
+// concreto de usecase.Verificacao.
+type Verificador interface {
+	Executar(ctx context.Context, cmd usecase.ComandoVerificar) (usecase.ResultadoVerificacao, error)
+}
+
+// Textos das respostas de erro da verificação.
+const (
+	// TextoExpressaoAusente acompanha o 400 de `expressao` vazia ou ausente.
+	TextoExpressaoAusente = "Expressão de verificação não informada"
+	// TextoFalhaAoVerificar acompanha o 422 de documento que não pôde ser lido.
+	TextoFalhaAoVerificar = "Erro ao verificar o PDF"
+)
+
+// ocorrenciaJSON é uma página em que a expressão foi encontrada.
+type ocorrenciaJSON struct {
+	Pagina uint64 `json:"pagina"`
+	// Trecho é omitido quando a expressão casou por frase mas não aparece como
+	// subcadeia contígua — ver usecase.recortarTrecho.
+	Trecho string `json:"trecho,omitempty"`
+}
+
+// respostaDeVerificacao é o documento devolvido.
+//
+// `encontrado` e `total_ocorrencias` são redundantes com `ocorrencias` de
+// propósito: quem consome isto com `jq` ou pelo Postman quer a resposta no
+// primeiro campo, não contando um array.
+type respostaDeVerificacao struct {
+	Expressao        string           `json:"expressao"`
+	TermosBuscados   []string         `json:"termos_buscados"`
+	Encontrado       bool             `json:"encontrado"`
+	TotalOcorrencias int              `json:"total_ocorrencias"`
+	TotalPaginas     int              `json:"total_paginas"`
+	Ocorrencias      []ocorrenciaJSON `json:"ocorrencias"`
+	Diagnostico      []string         `json:"diagnostico,omitempty"`
+}
+
+// verificarPDF atende POST /pdf-verificacao.
+func (s *servico) verificarPDF(w http.ResponseWriter, r *http.Request) {
+	lida, err := lerSubmissao(r, s.maxUploadBytes)
+	if err != nil {
+		// Mesmo tratamento de /pdf: o corpo acima do teto tem resposta própria,
+		// o resto é falha de leitura.
+		if errors.Is(err, ErrCorpoAcimaDoLimite) {
+			var criticas domain.Criticas
+			criticas.Adicionar(domain.CriticaPDFAcimaDoLimite)
+			s.escritor.Escrever(w, r, http.StatusBadRequest,
+				criticas.Mensagem(), criticas.Itens())
+			return
+		}
+		s.logger.ErrorContext(r.Context(), "falha ao ler o corpo da verificação",
+			slog.Any("erro", err))
+		s.escritor.Escrever(w, r, http.StatusUnprocessableEntity, TextoFalhaAoVerificar, nil)
+		return
+	}
+
+	resultado, err := s.verificador.Executar(r.Context(), usecase.ComandoVerificar{
+		Submissao: lida.submissao,
+		Conteudo:  lida.conteudo,
+		Expressao: lida.expressao,
+	})
+
+	switch {
+	case err == nil:
+
+	case errors.Is(err, usecase.ErrExpressaoVazia):
+		s.escritor.Escrever(w, r, http.StatusBadRequest, TextoExpressaoAusente, nil)
+		return
+
+	case errors.Is(err, usecase.ErrExpressaoInvalida):
+		// A expressão não compila como filtro — mesma classe de recusa que o
+		// laço de recorte encontra numa expressão cadastrada malformada.
+		s.escritor.Escrever(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+
+	case errors.Is(err, domain.ErrValidacao):
+		// As MESMAS críticas de /pdf, no mesmo formato.
+		var validacao *domain.ErroDeValidacao
+		if !errors.As(err, &validacao) {
+			s.escritor.Escrever(w, r, http.StatusUnprocessableEntity, TextoFalhaAoVerificar, nil)
+			return
+		}
+		s.escritor.Escrever(w, r, http.StatusBadRequest,
+			validacao.Criticas.Mensagem(), validacao.Criticas.Itens())
+		return
+
+	default:
+		s.logger.ErrorContext(r.Context(), "falha na verificação manual", slog.Any("erro", err))
+		s.escritor.Escrever(w, r, http.StatusUnprocessableEntity, TextoFalhaAoVerificar, nil)
+		return
+	}
+
+	// A rota responde 200 mesmo quando NÃO encontra: a pergunta foi respondida.
+	// "Não achei" é resultado, não erro — e devolver 404 faria um cliente
+	// automatizado tratar como falha o caso mais comum do diagnóstico.
+	doc := respostaDeVerificacao{
+		Expressao:        resultado.Expressao,
+		TermosBuscados:   resultado.TermosBuscados,
+		Encontrado:       resultado.Encontrou(),
+		TotalOcorrencias: len(resultado.Ocorrencias),
+		TotalPaginas:     resultado.TotalPaginas,
+		Ocorrencias:      make([]ocorrenciaJSON, 0, len(resultado.Ocorrencias)),
+		Diagnostico:      resultado.Diagnostico,
+	}
+	for _, o := range resultado.Ocorrencias {
+		doc.Ocorrencias = append(doc.Ocorrencias, ocorrenciaJSON{Pagina: o.Pagina, Trecho: o.Trecho})
+	}
+	if doc.TermosBuscados == nil {
+		doc.TermosBuscados = []string{}
+	}
+
+	corpo, err := json.Marshal(doc)
+	if err != nil {
+		// Inalcançável: o documento só tem tipos primitivos.
+		s.logger.ErrorContext(r.Context(), "falha ao serializar a verificação", slog.Any("erro", err))
+		s.escritor.Escrever(w, r, http.StatusInternalServerError, TextoFalhaAoVerificar, nil)
+		return
+	}
+
+	// Como em /importacao/{id}: o SUCESSO é sempre JSON, independentemente de
+	// RESPOSTA_PROBLEM_JSON. A chave governa o formato dos ERROS.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(corpo)
 }

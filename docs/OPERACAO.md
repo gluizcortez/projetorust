@@ -43,6 +43,7 @@ de busca.
 | `RATE_LIMIT_RPS` | `0` (desligado) | Balde de fichas por chave de API, com `Retry-After`. | `TestTaxaDesligadaNaoRecusa` dispara 200 requisições; o middleware nem entra na cadeia. |
 | `STATUS_ENDPOINT` | `false` | Registra `GET /importacao/{id}`. Adição pura. | `TestStatusEndpointDesligadoNaoRegistraARota`: 404 com a página HTML de rota inexistente. |
 | `HEALTH_ENDPOINTS` | `false` | Registra `/health/live` e `/health/ready`. | `TestHealthDesligadoNaoRegistraAsRotas`, e `TestPingNaoMudaComHealthLigado` para o outro lado. |
+| `VERIFICACAO_ENDPOINT` | `false` | Registra `POST /pdf-verificacao`, a busca manual de uma expressão num PDF. Adição pura, e **não toca no banco**: o caso de uso não recebe repositório algum. | verificado em execução — com a chave no padrão a rota devolve 404 com a página de rota inexistente. |
 
 Ajustes que só têm efeito com `VARREDURA_ORFAS` ligada:
 

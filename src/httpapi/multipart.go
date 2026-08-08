@@ -24,10 +24,26 @@ const (
 	CampoIDCaderno            = "id-caderno"
 )
 
+// CampoExpressao é o campo EXCLUSIVO de POST /pdf-verificacao
+// (VERIFICACAO_ENDPOINT). O legado não o conhece.
+//
+// Ele é lido para `submissaoLida.expressao` em toda submissão, inclusive nas de
+// `/pdf` — mas `/pdf` não olha esse campo, então nada muda ali: antes o campo
+// era descartado como desconhecido, agora é guardado e ignorado. Mesmo status,
+// mesmo corpo, mesmo efeito no banco.
+//
+// Ler tudo de uma vez é obrigatório, não preferência: o corpo multipart é
+// consumido em fluxo e não pode ser relido.
+const CampoExpressao = "expressao"
+
 // submissaoLida é o resultado da análise do corpo multipart.
 type submissaoLida struct {
 	submissao domain.SubmissaoPDF
 	conteudo  []byte
+
+	// expressao só é preenchida quando o campo vem no corpo, e só
+	// `/pdf-verificacao` a lê.
+	expressao string
 }
 
 // ErrCorpoInvalido indica corpo multipart que não pôde ser analisado.
@@ -150,7 +166,7 @@ func lerSubmissao(r *http.Request, maxMemoria int64) (submissaoLida, error) {
 			return submissaoLida{}, fmt.Errorf("campo %q: %w", nome, erroDeLeitura(err))
 		}
 		definidos[nome] = true
-		guardarCampo(&lida.submissao, nome, string(valor))
+		guardarCampo(&lida, nome, string(valor))
 	}
 
 	lida.submissao.ArquivoEnviado = temPDF
@@ -192,24 +208,27 @@ func nomeDoArquivo(parte *multipart.Part) string {
 
 func ehCampoConhecido(nome string) bool {
 	switch nome {
-	case CampoDataCaderno, CampoDataDisponibilizacao, CampoIDUsuario, CampoIDCaderno:
+	case CampoDataCaderno, CampoDataDisponibilizacao, CampoIDUsuario, CampoIDCaderno,
+		CampoExpressao:
 		return true
 	default:
 		return false
 	}
 }
 
-func guardarCampo(s *domain.SubmissaoPDF, nome, valor string) {
+func guardarCampo(lida *submissaoLida, nome, valor string) {
 	v := valor
 	switch nome {
 	case CampoDataCaderno:
-		s.DataCaderno = &v
+		lida.submissao.DataCaderno = &v
 	case CampoDataDisponibilizacao:
-		s.DataDisponibilizacao = &v
+		lida.submissao.DataDisponibilizacao = &v
 	case CampoIDUsuario:
-		s.IDUsuario = &v
+		lida.submissao.IDUsuario = &v
 	case CampoIDCaderno:
-		s.IDCaderno = &v
+		lida.submissao.IDCaderno = &v
+	case CampoExpressao:
+		lida.expressao = v
 	}
 }
 

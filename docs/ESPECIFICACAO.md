@@ -889,8 +889,9 @@ a suíte de paridade verifica.
 | `GRAVACAO_EM_LOTE` | Dois comandos por chave de pesquisa em vez de dois por recorte. **O estado do banco é idêntico** (§5), incluindo `dt_recorte`. |
 | `IDEMPOTENCIA_POR_HASH` | Reenvio de documento **finalizado** devolve o id existente, com **a mesma resposta 200** de §1.4.3, sem registrar importação nova. |
 | `VARREDURA_ORFAS` | Tarefa periódica sobre importações paradas em 1–3 (§3.5). Com a política padrão, apenas registra e conta. |
+| `VERIFICACAO_ENDPOINT` | Rota `POST /pdf-verificacao`, em JSON. Adição pura, e **sem persistência alguma** — ver §7.6. |
 
-### 7.3 Os três literais que só existem com chave ligada
+### 7.3 Os literais que só existem com chave ligada
 
 Nenhum deles aparece em `reference/main.rs`; todos são inalcançáveis com a
 configuração no padrão.
@@ -901,6 +902,7 @@ configuração no padrão.
 | `Limite de requisições excedido` | `RATE_LIMIT_RPS` | 429 |
 | `Importação não encontrada`, `Identificador inválido`, `Erro ao consultar a importação` | `STATUS_ENDPOINT` | 404, 400, 500 |
 | `vivo`, `pronto`, `indisponível` | `HEALTH_ENDPOINTS` | 200, 200, 503 |
+| `Expressão de verificação não informada`, `Erro ao verificar o PDF` | `VERIFICACAO_ENDPOINT` | 400, 422 |
 
 ### 7.4 O que NÃO existe, e por quê
 
@@ -912,6 +914,47 @@ tarefa. Ver `docs/DECISOES-ABERTAS.md`, **D-21**.
 Consequência que vale além da varredura: **toda importação que falha é perda
 definitiva de trabalho**, para qualquer causa. A única recuperação é o cliente
 reenviar o documento.
+
+### 7.6 `POST /pdf-verificacao` — a busca manual
+
+Rota de **diagnóstico do time técnico**, não do fluxo do produto. Existe para
+responder, sobre um PDF em mãos, a pergunta que hoje só se responde submetendo
+o documento de verdade e depois consultando o banco:
+
+> esta expressão aparece neste documento? em que página? e se não aparece, por quê?
+
+**Entrada.** Os mesmos cinco campos de `/pdf` — validados pelas **mesmas
+críticas, na mesma ordem** — mais o campo `expressao`, obrigatório.
+
+**Saída.** Sempre `200` quando a pergunta pôde ser respondida, **inclusive
+quando nada é encontrado**: "não achei" é resultado, não erro, e um 404 faria
+um cliente automatizado tratar como falha o caso mais comum do diagnóstico.
+
+```json
+{
+  "expressao": "Dra Deborah da Silva Felix",
+  "termos_buscados": ["dra", "deborah", "da", "silva", "felix"],
+  "encontrado": true,
+  "total_ocorrencias": 1,
+  "total_paginas": 1,
+  "ocorrencias": [ { "pagina": 1, "trecho": "…Relatora: Dra. Deborah da Silva Felix. Retirado de…" } ],
+  "diagnostico": []
+}
+```
+
+**A busca é a MESMA de `/pdf`** — mesmo extrator, mesmo normalizador, mesmo
+indexador, mesma `Indice.Frase`. Isso não é reaproveitamento por economia: uma
+ferramenta de diagnóstico que buscasse de outro jeito mentiria sobre o serviço.
+Em particular, ela **reproduz os defeitos preservados**: expressão acentuada não
+casa aqui, como não casa lá.
+
+O que ela faz de diferente é **dizer por quê**. O campo `diagnostico` aponta
+acento (INV-P19), termo descartado por comprimento (INV-P03), expressão que não
+gera termo (INV-P06) e documento sem camada de texto.
+
+**Não toca no banco.** O caso de uso não recebe repositório algum — não tem por
+onde escrever. Verificado em execução: oito verificações seguidas deixam
+`tb_importacao` e `tb_recorte` com a mesma contagem.
 
 ### 7.5 Onde está o resto
 

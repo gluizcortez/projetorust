@@ -492,7 +492,7 @@ html { scroll-behavior: smooth; }
       <p>
         O serviço original tinha <strong>730 linhas de Rust num único arquivo</strong>
         — HTTP, banco, extração de PDF, indexação e busca, tudo junto. A reescrita
-        entregou <strong>cerca de 4.400 linhas de Go de fato</strong>, em 37 arquivos
+        entregou <strong>cerca de 4.700 linhas de Go de fato</strong>, em 38 arquivos
         distribuídos por 15 pacotes, com as responsabilidades separadas e as regras de negócio
         isoladas da infraestrutura.
       </p>
@@ -513,28 +513,28 @@ html { scroll-behavior: smooth; }
           <tbody>
             <tr>
               <td>Substitui <strong>biblioteca</strong> que o Rust apenas importava — o índice de busca do Tantivy, a remoção de acentos do <code>diacritics</code>, o analisador de datas permissivo do <code>chrono</code></td>
-              <td class="num">748</td><td class="num">17%</td>
+              <td class="num">748</td><td class="num">16%</td>
             </tr>
             <tr>
               <td>Substitui o <strong>framework HTTP</strong>: roteamento, análise de <code>multipart</code>, página de erro e cadeia de middleware que o Salvo dava pronto</td>
-              <td class="num">604</td><td class="num">14%</td>
+              <td class="num">604</td><td class="num">13%</td>
             </tr>
             <tr>
               <td><strong>Melhorias atrás de chave</strong> — não existem no legado e, com tudo no padrão, <strong>não executam</strong></td>
-              <td class="num">1.131</td><td class="num">26%</td>
+              <td class="num">1.440</td><td class="num">31%</td>
             </tr>
             <tr>
               <td><strong>O serviço em si</strong>: domínio, fluxos, acesso ao banco e montagem</td>
-              <td class="num">1.924</td><td class="num">43%</td>
+              <td class="num">1.924</td><td class="num">41%</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <p>
-        Ou seja: <strong>31% do código existe para absorver o que era dependência</strong>,
-        <strong>26% são as melhorias que você liga quando quiser</strong>, e sobra
-        <strong>43% — 1.924 linhas — que é o serviço propriamente dito</strong>. O
+        Ou seja: <strong>29% do código existe para absorver o que era dependência</strong>,
+        <strong>31% são as melhorias que você liga quando quiser</strong>, e sobra
+        <strong>41% — 1.924 linhas — que é o serviço propriamente dito</strong>. O
         Rust fazia esse mesmo trabalho em 559 linhas de código, com estado global e
         descartando erros em uma dúzia de pontos; a diferença aí é injeção explícita
         de dependências e tratamento de erro, que é o que tornou possível comparar
@@ -544,7 +544,7 @@ html { scroll-behavior: smooth; }
       <div class="bloco">
         <div class="cabeca">Sobre o tamanho dos arquivos</div>
         <p>
-          O repositório tem 11.919 linhas em <code>src/</code>, mas o número que
+          O repositório tem 12.498 linhas em <code>src/</code>, mas o número que
           importa é outro: <strong>3.549 linhas são tabelas geradas por máquina</strong>
           (mapeamento de acentos e classificação Unicode — dados, não lógica), e
           <strong>36% do que sobra é comentário</strong>. Os comentários não explicam
@@ -718,11 +718,11 @@ html { scroll-behavior: smooth; }
           <div class="oque">Os tipos e as regras do negócio: importação, recorte, perfil, máquina de estados, textos de crítica. Não importa nada de infraestrutura.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>usecase</span><span class="linhas">608 ln de código</span></div>
+          <div class="nome"><span>usecase</span><span class="linhas">790 ln de código</span></div>
           <div class="oque">Os fluxos: <em>ingerir</em> (validar e registrar), <em>processar</em> (extrair, indexar, recortar, gravar) e <em>varrer</em> importações presas.</div>
         </div>
         <div class="pacote">
-          <div class="nome"><span>app</span><span class="linhas">436 ln de código</span></div>
+          <div class="nome"><span>app</span><span class="linhas">456 ln de código</span></div>
           <div class="oque">A raiz de composição. Monta o grafo inteiro de dependências, explicitamente, e conduz o ciclo de vida do processo. É por aqui que se entende o sistema todo.</div>
         </div>
         <div class="pacote">
@@ -734,7 +734,7 @@ html { scroll-behavior: smooth; }
       <h4>Entrada e saída</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>httpapi</span><span class="linhas">572 ln de código</span></div>
+          <div class="nome"><span>httpapi</span><span class="linhas">677 ln de código</span></div>
           <div class="oque">Rotas, análise do <code>multipart</code> e a página de erro do framework original reproduzida byte a byte. O roteamento é feito à mão porque o <code>ServeMux</code> do Go compara caminhos de outro jeito.</div>
         </div>
         <div class="pacote">
@@ -774,7 +774,7 @@ html { scroll-behavior: smooth; }
       <h4>Apoio</h4>
       <div class="pacotes">
         <div class="pacote">
-          <div class="nome"><span>config</span><span class="linhas">373 ln de código</span></div>
+          <div class="nome"><span>config</span><span class="linhas">375 ln de código</span></div>
           <div class="oque">Lê e valida as variáveis de ambiente. Segredos usam um tipo que se redige sozinho em log e em mensagem de erro.</div>
         </div>
         <div class="pacote">
@@ -790,7 +790,7 @@ html { scroll-behavior: smooth; }
       <div class="bloco">
         <div class="cabeca">Um arquivo por assunto, não por tipo</div>
         <p>
-          São 37 arquivos escritos à mão. <code>domain/modelo.go</code> tem a
+          São 38 arquivos escritos à mão. <code>domain/modelo.go</code> tem a
           importação, o recorte e o perfil juntos porque são o mesmo assunto — o
           que o serviço manipula; as regras que operam sobre eles ficam em
           <code>validacao.go</code> e <code>status.go</code>. Os quatro
@@ -984,6 +984,12 @@ ORDER BY id_importacao DESC LIMIT 5;</code></pre>
               <td><span class="pilula p-add">STATUS_ENDPOINT</span></td>
             </tr>
             <tr>
+              <td><code>POST /pdf-verificacao</code></td>
+              <td><code>X-API-KEY</code></td>
+              <td>Procura uma expressão no PDF e devolve as páginas em JSON. <strong>Não grava nada.</strong> Ver a <a href="#chaves">seção 7</a>.</td>
+              <td><span class="pilula p-add">VERIFICACAO_ENDPOINT</span></td>
+            </tr>
+            <tr>
               <td><code>GET /health/live</code><br><code>GET /health/ready</code></td>
               <td>não</td>
               <td>Sondas para orquestrador. <em>Ready</em> verifica o banco e a fila.</td>
@@ -1121,7 +1127,7 @@ ORDER BY id_importacao DESC LIMIT 5;</code></pre>
       <h2 class="titulo">As chaves de melhoria</h2>
 
       <p>
-        Dez evoluções técnicas foram implementadas, e <strong>todas nascem
+        Onze evoluções técnicas foram implementadas, e <strong>todas nascem
         desligadas</strong>. Com o ambiente vazio, o serviço se comporta
         exatamente como o original. Ligar uma chave é uma decisão consciente, e
         cada uma muda uma coisa só.
@@ -1135,7 +1141,7 @@ ORDER BY id_importacao DESC LIMIT 5;</code></pre>
         <li><span class="pilula p-sem">muda semântica</span> altera <em>o que o serviço faz</em>. Exige decisão de produto.</li>
       </ul>
 
-      <h3>As dez chaves</h3>
+      <h3>As onze chaves</h3>
 
       <div class="rolagem">
         <table>
@@ -1154,6 +1160,12 @@ ORDER BY id_importacao DESC LIMIT 5;</code></pre>
               <td><code>false</code></td>
               <td><span class="pilula p-add">adição</span></td>
               <td>Registra <code>GET /importacao/{id}</code>, que devolve o estado da importação em JSON. Autenticado, como <code>/pdf</code>.</td>
+            </tr>
+            <tr>
+              <td><code>VERIFICACAO_ENDPOINT</code></td>
+              <td><code>false</code></td>
+              <td><span class="pilula p-add">adição</span></td>
+              <td>Registra <code>POST /pdf-verificacao</code>: procura uma expressão num PDF e devolve em JSON as páginas em que a encontrou. <strong>Não interage com o banco</strong> — o caso de uso não recebe repositório algum. Ver abaixo.</td>
             </tr>
             <tr>
               <td><code>MAX_UPLOAD_BYTES</code></td>
@@ -1222,6 +1234,77 @@ ORDER BY id_importacao DESC LIMIT 5;</code></pre>
           </tbody>
         </table>
       </div>
+
+      <h3><code>VERIFICACAO_ENDPOINT</code> — a ferramenta de diagnóstico</h3>
+
+      <p>
+        Vale detalhar porque é a única chave que existe para o <strong>time
+        técnico</strong>, não para o produto. Ela responde, sobre um PDF em mãos,
+        a pergunta que hoje só se responde submetendo o documento de verdade e
+        depois vasculhando o banco:
+      </p>
+
+      <p><em>esta expressão aparece neste documento? em que página? e se não aparece, por quê?</em></p>
+
+      <pre><code>curl -X POST http://localhost:6001/pdf-verificacao \
+  -H "X-API-KEY: 01956cb2-2f85-7440-9767-1a6651c10e0f" \
+  -F "data-caderno=2026-07-08" -F "data-disponibilizacao=2026-07-08" \
+  -F "id-usuario=44521" -F "id-caderno=1" \
+  -F "expressao=Dra Deborah da Silva Felix" \
+  -F "pdf=@exemplos/dou-secao1-2026-07-08.pdf"</code></pre>
+
+      <pre><code>{
+  "expressao": "Dra Deborah da Silva Felix",
+  "termos_buscados": ["dra", "deborah", "da", "silva", "felix"],
+  "encontrado": true,
+  "total_ocorrencias": 1,
+  "ocorrencias": [
+    { "pagina": 1, "trecho": "…Relatora: Dra. Deborah da Silva Felix. Retirado de pauta…" }
+  ]
+}</code></pre>
+
+      <p>
+        <strong>A busca é a mesma de <code>/pdf</code></strong> — mesmo extrator,
+        mesma normalização, mesmo índice, mesma busca por frase. Isso não é
+        economia de código, é o ponto: uma ferramenta de diagnóstico que buscasse
+        de outro jeito mentiria sobre o serviço, e o time gastaria o dobro do
+        tempo perseguindo uma diferença que só existe na ferramenta.
+      </p>
+
+      <p>
+        Ela reproduz até os defeitos preservados — expressão com acento não casa
+        aqui, como não casa lá. O que ela faz de diferente é <strong>dizer por
+        quê</strong>, no campo <code>diagnostico</code>:
+      </p>
+
+      <div class="bloco">
+        <div class="cabeca">O campo que resolve o chamado</div>
+        <p>
+          Com <code>expressao=LEI GERAL DE PROTEÇÃO DE DADOS</code>, a resposta
+          traz <code>"encontrado": false</code> e:
+        </p>
+        <p style="margin-left:14px;border-left:2px solid var(--linha-forte);padding-left:12px">
+          <em>“A expressão tem ACENTO. O texto do documento perde os acentos na
+          indexação e a expressão não passa pela mesma normalização, então ela
+          nunca casa. É defeito preservado do serviço original (INV-P19). Tente
+          sem acento.”</em>
+        </p>
+        <p>
+          O diagnóstico também aponta termo descartado por comprimento,
+          expressão que só tem pontuação e PDF sem camada de texto. E
+          <code>termos_buscados</code> mostra o que a busca de fato procurou —
+          ver isso resolve metade das dúvidas sozinho.
+        </p>
+      </div>
+
+      <p>
+        Responde <strong>200 mesmo quando não encontra</strong>: “não achei” é
+        resultado, não erro, e um 404 faria um cliente automatizado tratar como
+        falha o caso mais comum do diagnóstico. E <strong>não toca no
+        banco</strong> — verificado em execução, oito verificações seguidas
+        deixam <code>tb_importacao</code> e <code>tb_recorte</code> com a mesma
+        contagem.
+      </p>
 
       <h3>Configuração geral</h3>
 
@@ -1539,7 +1622,7 @@ LOG_FORMATO=json</code></pre>
   <footer class="rodape">
     <span>Serviço de recorte de diários oficiais</span>
     <span>Go 1.24 · PostgreSQL · MuPDF</span>
-    <span>15 pacotes · 37 arquivos · ~4.400 linhas de código</span>
+    <span>15 pacotes · 38 arquivos · ~4.700 linhas de código</span>
     <span>Porta <code>6001</code></span>
   </footer>
 

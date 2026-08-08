@@ -245,6 +245,20 @@ func Novo(
 		return nil, fmt.Errorf("montando a varredura de órfãs: %w", err)
 	}
 
+	// 13c — verificação manual, quando ligada.
+	//
+	// Reaproveita o MESMO extrator e o MESMO indexador do pipeline: é o que
+	// garante que o diagnóstico responda sobre o serviço, e não sobre uma
+	// segunda implementação que divergiria em silêncio.
+	//
+	// Nenhum repositório entra aqui. A rota não escreve no banco porque o caso
+	// de uso não tem por onde.
+	verificacao, err := montarVerificacao(cfg, logger, extrator, indexador)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("montando a verificação manual: %w", err)
+	}
+
 	// 14 — roteador com a cadeia de middleware.
 	roteador, err := httpapi.NovoRouter(httpapi.Dependencias{
 		Ingestor:            ingestao,
@@ -257,6 +271,8 @@ func Novo(
 		HealthEndpoints:     cfg.HealthEndpoints,
 		Importacoes:         seSim(cfg.StatusEndpoint, httpapi.ConsultorDeImportacao(consultas)),
 		Pronto:              seSim(cfg.HealthEndpoints, prontidao(pool, executor, cfg)),
+		VerificacaoEndpoint: cfg.VerificacaoEndpoint,
+		Verificador:         seSim(cfg.VerificacaoEndpoint, httpapi.Verificador(verificacao)),
 	})
 	if err != nil {
 		pool.Close()
@@ -514,6 +530,24 @@ func forcado(forcar <-chan struct{}) bool {
 // -------------------------------------------------------------------------
 // Adaptadores que só a raiz de composição precisa
 // -------------------------------------------------------------------------
+
+// montarVerificacao constrói o caso de uso de verificação manual.
+//
+// Devolve `nil, nil` com a chave desligada — a rota não é registrada e o
+// roteador não exige o Verificador. É o mesmo padrão de montarVarredura.
+func montarVerificacao(
+	cfg *config.Config, logger *slog.Logger,
+	extrator domain.ExtratorTexto, indexador domain.Indexador,
+) (*usecase.Verificacao, error) {
+	if !cfg.VerificacaoEndpoint {
+		return nil, nil
+	}
+	return usecase.NovaVerificacao(usecase.DependenciasDaVerificacao{
+		Extrator:  extrator,
+		Indexador: indexador,
+		Logger:    logger,
+	})
+}
 
 // extratorDeProducao devolve o extrator que o serviço usa de verdade.
 //

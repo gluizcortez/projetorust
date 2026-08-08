@@ -2449,3 +2449,112 @@ acima.
 
 `docs/kickoff.html`, que é o documento VIVO, foi atualizado: números,
 contagem por pacote e a nota de organização dos arquivos.
+
+---
+
+## `POST /pdf-verificacao` — busca manual para diagnóstico
+
+**Funcionalidade nova, a pedido.** É a primeira coisa neste projeto que não
+existe no legado nem tenta reproduzi-lo: uma rota de troubleshoot para o time
+técnico.
+
+### O problema que ela resolve
+
+Quando alguém pergunta "por que o recorte do cliente X não saiu?", hoje a única
+forma de responder é submeter o documento de verdade, esperar o processamento e
+vasculhar o banco — criando uma importação de teste no caminho. A rota responde
+direto, e **sem gravar nada**.
+
+### As decisões que valem registro
+
+**1. Nasce desligada, como tudo.** `VERIFICACAO_ENDPOINT=false`. A regra do
+projeto não abre exceção para adição pura, e não abriu aqui.
+
+**2. A busca é a MESMA de `/pdf`, e isso não é economia de código.** Mesmo
+extrator, mesmo normalizador, mesmo indexador, mesma `Indice.Frase`. Uma
+ferramenta de diagnóstico que buscasse de outro jeito **mentiria sobre o
+serviço**, e o time gastaria o dobro do tempo perseguindo uma diferença que só
+existe na ferramenta.
+
+Em particular ela **reproduz os defeitos preservados**: expressão acentuada não
+casa aqui, como não casa lá.
+
+**3. O que ela faz de diferente é DIZER POR QUÊ.** O campo `diagnostico` é o
+motivo de a rota existir, e não `ocorrencias`. Ele aponta:
+
+| Situação | Invariante |
+|---|---|
+| expressão com acento | INV-P19 — nunca casa, e a mensagem manda tentar sem acento |
+| termo com 40 bytes ou mais | INV-P03 — descartado, e ainda deixa buraco na numeração |
+| expressão que só tem pontuação | INV-P06 — não gera termo algum |
+| documento sem página de texto | PDF de imagens ou truncado |
+| nada encontrado e nada anômalo | lembra que a busca é por FRASE, não por palavra solta |
+
+**4. Responde 200 mesmo quando não encontra.** "Não achei" é resultado, não
+erro. Um 404 faria um cliente automatizado tratar como falha o caso mais comum
+do diagnóstico.
+
+**5. Não toca no banco por CONSTRUÇÃO, não por disciplina.**
+`DependenciasDaVerificacao` tem três campos — extrator, indexador, logger — e
+nenhum repositório. O caso de uso não escreve porque não tem por onde.
+
+### O trecho: uma correção no meio do caminho
+
+A primeira versão localizava o trecho de contexto por `strings.Index` da
+expressão no texto. Rodou, e o campo veio **vazio no primeiro teste real**: no
+documento está `Dra. Deborah da Silva Felix`, com um ponto que não gera termo —
+a frase casa, a subcadeia não existe.
+
+Ou seja: falhava no caso mais comum, nome com abreviação. A localização passou a
+ser feita com os TERMOS, unidos por um separador que aceita qualquer pontuação
+entre eles — a mesma forma da frase que o índice casou. Depois disso, tanto
+`Dra Deborah da Silva Felix` quanto `NF-000225.2026.03.007/0` trazem trecho.
+
+### O efeito em `/pdf`, e por que é nulo
+
+`lerSubmissao` passou a aceitar o campo `expressao` e a guardá-lo em
+`submissaoLida`. `/pdf` não olha esse campo. Antes ele era descartado como
+desconhecido; agora é lido e ignorado — mesmo status, mesmo corpo, mesmo efeito
+no banco.
+
+Ler tudo de uma vez é obrigatório, não preferência: o corpo multipart é
+consumido em fluxo e não pode ser relido.
+
+**Verificado:** um `POST /pdf` com `expressao=ISTO DEVE SER IGNORADO` no corpo
+produz os mesmos 5 recortes de sempre.
+
+### Verificação
+
+Sem suíte, tudo foi exercitado em execução.
+
+```
+chave NO PADRÃO
+  POST /pdf-verificacao        404 (rota inexistente)
+  GET  /ping                   200 "pong"  — inalterado
+
+chave LIGADA
+  "Dra Deborah da Silva Felix"       encontrado, pág. 1, com trecho
+  "NF-000225.2026.03.007/0"          encontrado, pág. 1, com trecho
+  "LEI GERAL DE PROTEÇÃO DE DADOS"   NÃO encontrado + diagnóstico de acento
+  "LEI GERAL DE PROTECAO DE DADOS"   encontrado, pág. 1
+  "PREFEITURA MUNICIPAL DE SAO PAULO" NÃO encontrado + lembrete de busca por frase
+  "!!! ---"                          zero termos + diagnóstico INV-P06
+
+  sem expressão   400 "Expressão de verificação não informada"
+  sem chave       401 "Faltou a X-API-KEY"
+  GET             405
+  campos faltando 400 com as MESMAS críticas de /pdf, na mesma ordem
+
+NÃO TOCA NO BANCO
+  8 verificações seguidas → tb_importacao 2→2, tb_recorte 6 inalterado
+
+CONTRATO DO LEGADO, depois de tudo
+  /ping 200 · /naoexiste 404 · / 405 · /pdf com campo extra → 5 recortes
+```
+
+`gofmt`, `go vet` e `golangci-lint` limpos.
+
+### O que ficou pendente
+
+A rota **não tem teste automatizado**, como nada mais no repositório. As
+verificações acima são reprodutíveis à mão, e estão listadas aqui para isso.
